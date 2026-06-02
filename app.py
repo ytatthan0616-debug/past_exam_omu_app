@@ -10,10 +10,10 @@ from PIL import Image
 
 # --- ここから追加：Firebaseの準備 ---
 import firebase_admin
-from firebase_admin import credentials, db  # firestoreではなくdbを使います
+from firebase_admin import credentials, db
 
+# すでに起動しているか確認してから初期化する
 if not firebase_admin._apps:
-    # パスワードは直接書かず、st.secrets 経由で呼び出す！
     key_dict = json.loads(st.secrets["FIREBASE_JSON"])
     cred = credentials.Certificate(key_dict)
     firebase_admin.initialize_app(cred, {
