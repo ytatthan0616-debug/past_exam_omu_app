@@ -119,7 +119,7 @@ if "username" not in st.session_state:
 
 conf = load_config()
 
-theme_mode = conf.get("theme_mode", "システム設定に従う")
+theme_mode = conf.get("theme_mode", "標準 (デフォルト)")
 
 if theme_mode == "標準 (デフォルト)":
     final_css = ""  # 標準のときは追加デザインを適用しない
@@ -462,8 +462,8 @@ else:
         st.markdown("<hr style='margin: 1em 0px; border: 0.5px solid #444;'/>", unsafe_allow_html=True)
         st.markdown("### 👁️ 見た目の設定")
         # テーマ選択の追加
-        theme_list = ["システム設定に従う", "お昼の猫カフェ (ライト)", "夜の猫カフェ (ダーク)", "標準 (デフォルト)"]
-        curr_theme = conf.get("theme_mode", "システム設定に従う")
+        theme_list = ["標準 (デフォルト)", "猫テーマ (システム設定に従う)", "お昼の猫カフェ (ライト)", "夜の猫カフェ (ダーク)"]
+        curr_theme = conf.get("theme_mode", "標準 (デフォルト)")
         selected_theme = st.radio("🎨 アプリのテーマ", theme_list, index=theme_list.index(curr_theme) if curr_theme in theme_list else 0)
         col_s1, col_s2 = st.columns(2)
         with col_s1:
