@@ -96,11 +96,17 @@ if "username" not in st.session_state:
     st.markdown("<h1 style='text-align: center;'>🚪 過去問演習アプリへようこそ</h1>", unsafe_allow_html=True)
     st.markdown("<p style='text-align: center;'>あなたの成績を保存するために、名前を教えてください。</p>", unsafe_allow_html=True)
     
+    st.info("""
+            **【注意事項】**
+入試問題は受験準備や教育目的での使用に限ります。
+それ以外の目的での転載や二次利用は禁止されていますのでご注意ください。
+""")
+
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         with st.form("login_form"):
             user_name = st.text_input("ニックネーム (友達と被らない名前にしてください)")
-            submitted = st.form_submit_button("学習をスタート 🚀", use_container_width=True)
+            submitted = st.form_submit_button("学習をスタート 🐈💨", use_container_width=True)
             if submitted:
                 if user_name.strip() == "":
                     st.error("名前を入力してください！")
@@ -124,6 +130,39 @@ elif conf.get("font_size") == "特大":
 if conf.get("font_family") == "明朝体 (試験本番風)":
     custom_css += "p, li, h1, h2, h3, .stMarkdown { font-family: 'Noto Serif JP', serif !important; } "
 custom_css += "</style>"
+
+# --- ここから追加：猫テーマのCSS ---
+custom_css += """
+/* 全体の背景色を淡いクリーム色に */
+.stApp {
+    background-color: #FFF9E6 !important;
+}
+/* 文字色を優しい焦げ茶色に */
+.stApp, h1, h2, h3, p, span, div, label {
+    color: #4A3000 !important;
+}
+/* ボタンを肉球カラー（ピンク）にして丸っこくする */
+div.stButton > button {
+    background-color: #FFB6C1 !important;
+    color: #4A3000 !important;
+    border-radius: 25px !important;
+    border: 2px solid #FF9EAA !important;
+    font-weight: bold !important;
+    transition: all 0.3s ease;
+}
+/* ボタンにマウスを乗せたときのアクション */
+div.stButton > button:hover {
+    background-color: #FF69B4 !important;
+    color: white !important;
+    transform: scale(1.05);
+}
+/* サイドバーの背景色をほんのりピンクに */
+[data-testid="stSidebar"] {
+    background-color: #FFE4E1 !important;
+}
+"""
+# --- ここまで追加 ---
+
 st.markdown(custom_css, unsafe_allow_html=True)
 
 data = load_data()
@@ -150,7 +189,7 @@ if "chat_q_key" not in st.session_state: st.session_state.chat_q_key = None
 # サイドバー
 # ==========================================
 st.sidebar.title("メニュー")
-if st.sidebar.button("🏠 ホーム", use_container_width=True):
+if st.sidebar.button("🐾 ホーム", use_container_width=True):
     st.session_state.mode = "home"
     st.rerun()
 
@@ -185,6 +224,16 @@ if st.sidebar.button("⚙️ 個人設定", use_container_width=True):
 # ==========================================
 # メイン画面
 # ==========================================
+# --- フッター（すべての画面で表示） ---
+st.markdown("<hr style='border: 0.5px solid #444;'/>", unsafe_allow_html=True)
+st.markdown("""
+<div style="font-size: 0.8em; color: #888; text-align: center;">
+    <b>【利用規約・著作権について】</b><br>
+    入試問題は受験予定者が受験の準備に使用することや、教育機関の教職員が教育の一環として使用することを目的としています。<br>
+    それ以外の目的での複製、転載、転用は禁止します。また、入試問題を二次利用する場合は別途著作権許諾処理等を行っていただく必要があります。
+</div>
+""", unsafe_allow_html=True)
+
 if not data and st.session_state.mode not in ["settings", "ai_add"]:
     st.warning("まだ問題データが登録されていません．「✨ AI問題追加」からデータを登録してください．")
 else:
@@ -197,7 +246,7 @@ else:
             if conf.get("show_balloons", True): st.balloons()
             st.session_state.just_completed = False
 
-        st.markdown("<h1 style='text-align: center;'>🏠 学習ホーム</h1>", unsafe_allow_html=True)
+        st.markdown("<h1 style='text-align: center;'>🐾 学習ホーム</h1>", unsafe_allow_html=True)
         
         target_date_str = conf.get("target_date", "2026-08-20")
         exam_name = conf.get("exam_name", "大阪公立大学大学院 院試")
@@ -511,7 +560,7 @@ else:
             order_type = st.radio("年度の順番", ["古い順（過去から順番に）", "新しい順（直近から順番に）"])
             
         st.write("")
-        if st.button("🚀 このコースでスタート！", type="primary", use_container_width=True):
+        if st.button("🐈💨 このコースでスタート！", type="primary", use_container_width=True):
             seq = [{"genre": g, "q": q} for g, qs in data.items() for q in qs]
             direction = -1 if order_type == "新しい順（直近から順番に）" else 1
             if "年度ごとに" in seq_type:
@@ -704,7 +753,7 @@ else:
                 st.write("**🔽 この年度の演習を開始する**")
                 btn_cols = st.columns(4)
                 
-                if btn_cols[0].button("🚀 年度全体を通しで解く", key=f"play_all_{year}", use_container_width=True):
+                if btn_cols[0].button("🐈💨 年度全体を通しで解く", key=f"play_all_{year}", use_container_width=True):
                     st.session_state.seq_list = [{"genre": g, "q": q} for g, q in y_qs]
                     st.session_state.seq_idx = 0
                     st.session_state.quiz_mode = "sequential"
@@ -820,7 +869,7 @@ else:
                     if st.button("解答を表示する", type="primary", use_container_width=True): 
                         st.session_state.show_answer = True; st.rerun()
                 with c2:
-                    btn_skip_text = "スキップ ⏭️" if st.session_state.quiz_mode == "random" or st.session_state.seq_idx < len(st.session_state.seq_list) - 1 else "ホームに戻る 🏠"
+                    btn_skip_text = "スキップ ⏭️" if st.session_state.quiz_mode == "random" or st.session_state.seq_idx < len(st.session_state.seq_list) - 1 else "ホームに戻る 🐾"
                     if st.button(btn_skip_text, use_container_width=True):
                         if st.session_state.quiz_mode == "random":
                             st.session_state.current_q = random.choice(data[current_genre]); st.session_state.show_answer = False; st.rerun()
@@ -857,7 +906,7 @@ else:
                             
                     with st.form("chat_form", clear_on_submit=True):
                         user_input = st.text_input("この問題について分からない部分を質問してください:")
-                        submitted = st.form_submit_button("質問する 🚀")
+                        submitted = st.form_submit_button("質問する 🐈💨")
                         
                         if submitted and user_input:
                             st.session_state.chat_history.append({"role": "user", "text": user_input})
