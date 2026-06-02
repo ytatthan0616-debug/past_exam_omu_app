@@ -92,6 +92,8 @@ def extract_year_val(year_str):
 
 st.set_page_config(page_title="過去問演習アプリ", layout="wide")
 
+
+
 if "username" not in st.session_state:
     st.markdown("<h1 style='text-align: center;'>🚪 過去問演習アプリへようこそ</h1>", unsafe_allow_html=True)
     st.markdown("<p style='text-align: center;'>あなたの成績を保存するために、名前を教えてください。</p>", unsafe_allow_html=True)
@@ -105,7 +107,7 @@ if "username" not in st.session_state:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         with st.form("login_form"):
-            user_name = st.text_input("ニックネーム (友達と被らない名前にしてください)")
+            user_name = st.text_input("ニックネーム (他人と被らない名前にしてください．既にニックネームが登録されている場合はそれを入力してください)")
             submitted = st.form_submit_button("学習をスタート 🐈💨", use_container_width=True)
             if submitted:
                 if user_name.strip() == "":
@@ -116,6 +118,47 @@ if "username" not in st.session_state:
     st.stop() # ログインするまで下のアプリ画面を表示しない
 
 conf = load_config()
+
+theme_mode = conf.get("theme_mode", "システム設定に従う")
+
+if theme_mode == "標準 (デフォルト)":
+    final_css = ""  # 標準のときは追加デザインを適用しない
+else:
+    base_css = """
+    /* 共通設定（ボタンの丸みなど） */
+    div.stButton > button { border-radius: 25px !important; font-weight: bold !important; transition: all 0.3s ease; }
+    div[data-baseweb="input"] > div { border-radius: 15px !important; }
+    """
+
+    light_css = """
+    /* ☀️ ライトモード（お昼の猫カフェ） */
+    .stApp { background: linear-gradient(135deg, #FFF9E6 0%, #FFE4E1 100%) !important; }
+    p, h1, h2, h3, label, li { color: #4A3000 !important; }
+    div.stButton > button { background-color: #FFB6C1 !important; color: #4A3000 !important; border: 2px solid #FF9EAA !important; }
+    div.stButton > button:hover { background-color: #FF69B4 !important; color: white !important; transform: scale(1.05); }
+    div[data-baseweb="input"] > div { border: 2px solid #FFB6C1 !important; background-color: white !important; }
+    """
+
+    dark_css = """
+    /* 🌙 ダークモード（夜の猫カフェ） */
+    .stApp { background: linear-gradient(135deg, #2C222B 0%, #1A151F 100%) !important; }
+    p, h1, h2, h3, label, li { color: #FFE4E1 !important; }
+    div.stButton > button { background-color: #8B5A65 !important; color: #FFE4E1 !important; border: 2px solid #A06E7A !important; }
+    div.stButton > button:hover { background-color: #FF69B4 !important; color: white !important; transform: scale(1.05); }
+    div[data-baseweb="input"] > div { border: 2px solid #8B5A65 !important; background-color: #3D2D3A !important; }
+    """
+
+    # 設定に合わせて適用するCSSを決定
+    if theme_mode == "お昼の猫カフェ (ライト)":
+        final_css = f"<style>{base_css}{light_css}</style>"
+    elif theme_mode == "夜の猫カフェ (ダーク)":
+        final_css = f"<style>{base_css}{dark_css}</style>"
+    else:
+        # 自動（システム設定に従う）の場合
+        final_css = f"<style>{base_css} @media (prefers-color-scheme: light) {{ {light_css} }} @media (prefers-color-scheme: dark) {{ {dark_css} }} </style>"
+
+if final_css != "":
+    st.markdown(final_css, unsafe_allow_html=True)
 
 if conf.get("gemini_api_key"):
     genai.configure(api_key=conf.get("gemini_api_key"))
@@ -131,37 +174,6 @@ if conf.get("font_family") == "明朝体 (試験本番風)":
     custom_css += "p, li, h1, h2, h3, .stMarkdown { font-family: 'Noto Serif JP', serif !important; } "
 custom_css += "</style>"
 
-# --- ここから追加：猫テーマのCSS ---
-custom_css += """
-/* 全体の背景色を淡いクリーム色に */
-.stApp {
-    background-color: #FFF9E6 !important;
-}
-/* 文字色を優しい焦げ茶色に */
-.stApp, h1, h2, h3, p, span, div, label {
-    color: #4A3000 !important;
-}
-/* ボタンを肉球カラー（ピンク）にして丸っこくする */
-div.stButton > button {
-    background-color: #FFB6C1 !important;
-    color: #4A3000 !important;
-    border-radius: 25px !important;
-    border: 2px solid #FF9EAA !important;
-    font-weight: bold !important;
-    transition: all 0.3s ease;
-}
-/* ボタンにマウスを乗せたときのアクション */
-div.stButton > button:hover {
-    background-color: #FF69B4 !important;
-    color: white !important;
-    transform: scale(1.05);
-}
-/* サイドバーの背景色をほんのりピンクに */
-[data-testid="stSidebar"] {
-    background-color: #FFE4E1 !important;
-}
-"""
-# --- ここまで追加 ---
 
 st.markdown(custom_css, unsafe_allow_html=True)
 
@@ -248,6 +260,9 @@ else:
 
         st.markdown("<h1 style='text-align: center;'>🐾 学習ホーム</h1>", unsafe_allow_html=True)
         
+        current_user = st.session_state.get("username", "Guest")
+        st.markdown(f"<p style='text-align: center; font-size: 1.2em;'>ようこそ、<b>{current_user}</b> さん！今日も学習を頑張りましょう🐾</p>", unsafe_allow_html=True)
+
         target_date_str = conf.get("target_date", "2026-08-20")
         exam_name = conf.get("exam_name", "大阪公立大学大学院 院試")
         
@@ -256,9 +271,9 @@ else:
         days_left = (target_date - today).days
         
         st.markdown(f"""
-        <div style="background-color: #1e1e2f; padding: 20px; border-radius: 10px; text-align: center; margin-bottom: 20px; border: 1px solid #444;">
-            <h2 style="margin: 0; color: #ddd;">{exam_name} まで</h2>
-            <h1 style="margin: 0; font-size: 3em; color: #ff4b4b;">あと {days_left} 日</h1>
+        <div style="background-color: rgba(255, 182, 193, 0.15); padding: 20px; border-radius: 15px; text-align: center; margin-bottom: 20px; border: 2px dashed #FF9EAA;">
+            <h2 style="margin: 0;">{exam_name} まで</h2>
+            <h1 style="margin: 0; font-size: 3em; color: #FF4B4B;">あと {days_left} 日</h1>
         </div>
         """, unsafe_allow_html=True)
         
@@ -331,7 +346,7 @@ else:
             }
         ))
         
-        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"}, height=350)
+        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", height=350)
         st.plotly_chart(fig, use_container_width=True)
 
         # --- 各分野の詳細スコア表示 ---
@@ -437,12 +452,19 @@ else:
     elif st.session_state.mode == "settings":
         st.markdown("<h1 style='text-align: center;'>⚙️ 個人設定</h1>", unsafe_allow_html=True)
         
+        current_user = st.session_state.get("username", "Guest")
+        st.markdown(f"<p style='text-align: center;'>現在のアカウント: <b>{current_user}</b></p>", unsafe_allow_html=True)
+
         st.markdown("### 🤖 AI連携設定")
         gemini_key = st.text_input("Gemini APIキー", value=conf.get("gemini_api_key", ""), type="password")
         st.caption("AIチャットや自動問題追加機能を使用するために必要です。[Google AI Studio](https://aistudio.google.com/) から無料で取得できます。")
 
         st.markdown("<hr style='margin: 1em 0px; border: 0.5px solid #444;'/>", unsafe_allow_html=True)
         st.markdown("### 👁️ 見た目の設定")
+        # テーマ選択の追加
+        theme_list = ["システム設定に従う", "お昼の猫カフェ (ライト)", "夜の猫カフェ (ダーク)", "標準 (デフォルト)"]
+        curr_theme = conf.get("theme_mode", "システム設定に従う")
+        selected_theme = st.radio("🎨 アプリのテーマ", theme_list, index=theme_list.index(curr_theme) if curr_theme in theme_list else 0)
         col_s1, col_s2 = st.columns(2)
         with col_s1:
             font_size_list = ["標準", "大きめ", "特大"]
@@ -540,6 +562,7 @@ else:
             conf["font_family"] = font_family
             conf["image_width"] = img_width
             conf["startup_mode"] = startup_mode
+            conf["theme_mode"] = selected_theme
             conf["show_balloons"] = show_balloons
             save_config(conf)
             st.success("設定を保存しました！")
