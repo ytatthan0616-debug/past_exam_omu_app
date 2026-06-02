@@ -1,0 +1,922 @@
+import streamlit as st
+import json
+import random
+import os
+import re
+import datetime
+import plotly.graph_objects as go
+import google.generativeai as genai
+from PIL import Image
+
+# --- ここから追加：Firebaseの準備 ---
+import firebase_admin
+from firebase_admin import credentials, db  # firestoreではなくdbを使います
+
+if not firebase_admin._apps:
+    # パスワードは直接書かず、st.secrets 経由で呼び出す！
+    key_dict = json.loads(st.secrets["FIREBASE_JSON"])
+    cred = credentials.Certificate(key_dict)
+    firebase_admin.initialize_app(cred, {
+        'databaseURL': 'https://past-exam-app-266ac-default-rtdb.asia-southeast1.firebasedatabase.app/'
+    })
+# --- クラウドデータベース用の読み書き関数 (Realtime DB版) ---
+
+def load_data():
+    ref = db.reference('app_data/all_questions')
+    data = ref.get()
+    return data if data else {}
+
+def save_data(data_dict):
+    ref = db.reference('app_data/all_questions')
+    ref.set(data_dict)
+
+def load_evals():
+    username = st.session_state.get("username", "Guest")
+    ref = db.reference(f'users/{username}/evals')
+    data = ref.get()
+    return data if data else {}
+
+def save_evals(evals):
+    username = st.session_state.get("username", "Guest")
+    ref = db.reference(f'users/{username}/evals')
+    ref.set(evals)
+
+def load_config():
+    username = st.session_state.get("username", "Guest")
+    ref = db.reference(f'users/{username}/config')
+    data = ref.get()
+    default_conf = {
+        "target_date": f"{datetime.date.today().year + 1}-08-20", 
+        "exam_name": "大阪公立大学大学院 院試",
+        "startup_mode": "ホーム",
+        "font_size": "標準",
+        "font_family": "標準 (ゴシック体)",
+        "image_width": 700,
+        "show_balloons": True,
+        "gemini_api_key": "",
+        "toeic_score": 0
+    }
+    return data if data else default_conf
+
+def save_config(conf):
+    username = st.session_state.get("username", "Guest")
+    ref = db.reference(f'users/{username}/config')
+    ref.set(conf)
+
+# --- 分野の並び順設定 ---
+GENRE_ORDER = ["電気回路", "電磁気", "数学"]
+
+def get_genre_idx(genre):
+    if genre in GENRE_ORDER:
+        return GENRE_ORDER.index(genre)
+    return 999
+
+def render_beautiful_tags(tags):
+    if not tags:
+        return
+    html = '<div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px;">'
+    for t in tags:
+        # 画像風のグラデーションと角丸デザイン
+        html += f'<span style="background: linear-gradient(135deg, #8a2be2, #4b0082); color: white; padding: 5px 15px; border-radius: 20px; font-size: 14px; border: 1px solid #bda0cb; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">{t}</span>'
+    html += '</div>'
+    st.markdown(html, unsafe_allow_html=True)
+
+def extract_num(prob_str):
+    m = re.search(r'\d+', str(prob_str))
+    return int(m.group()) if m else 0
+
+
+def extract_year_val(year_str):
+    m = re.search(r'[\d\.]+', str(year_str))
+    return float(m.group()) if m else 0
+
+st.set_page_config(page_title="過去問演習アプリ", layout="wide")
+
+if "username" not in st.session_state:
+    st.markdown("<h1 style='text-align: center;'>🚪 過去問演習アプリへようこそ</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center;'>あなたの成績を保存するために、名前を教えてください。</p>", unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        with st.form("login_form"):
+            user_name = st.text_input("ニックネーム (友達と被らない名前にしてください)")
+            submitted = st.form_submit_button("学習をスタート 🚀", use_container_width=True)
+            if submitted:
+                if user_name.strip() == "":
+                    st.error("名前を入力してください！")
+                else:
+                    st.session_state.username = user_name.strip()
+                    st.rerun()
+    st.stop() # ログインするまで下のアプリ画面を表示しない
+
+conf = load_config()
+
+if conf.get("gemini_api_key"):
+    genai.configure(api_key=conf.get("gemini_api_key"))
+
+# --- 個人設定（CSS）の適用 ---
+custom_css = "<style>"
+if conf.get("font_size") == "大きめ":
+    custom_css += "p, li, .katex, .stMarkdown { font-size: 1.2rem !important; } "
+elif conf.get("font_size") == "特大":
+    custom_css += "p, li, .katex, .stMarkdown { font-size: 1.5rem !important; } "
+
+if conf.get("font_family") == "明朝体 (試験本番風)":
+    custom_css += "p, li, h1, h2, h3, .stMarkdown { font-family: 'Noto Serif JP', serif !important; } "
+custom_css += "</style>"
+st.markdown(custom_css, unsafe_allow_html=True)
+
+data = load_data()
+
+# アプリの初期状態を設定
+if "mode" not in st.session_state:
+    startup = conf.get("startup_mode", "ホーム")
+    if startup == "ランダム演習": st.session_state.mode = "quiz"
+    elif startup == "成績リスト": st.session_state.mode = "dashboard"
+    else: st.session_state.mode = "home"
+
+if "quiz_mode" not in st.session_state: st.session_state.quiz_mode = "random"
+if "current_q" not in st.session_state: st.session_state.current_q = None
+if "current_genre" not in st.session_state: st.session_state.current_genre = None
+if "show_answer" not in st.session_state: st.session_state.show_answer = False
+if "selected_tag" not in st.session_state: st.session_state.selected_tag = None
+if "seq_list" not in st.session_state: st.session_state.seq_list = []
+if "seq_idx" not in st.session_state: st.session_state.seq_idx = 0
+if "just_completed" not in st.session_state: st.session_state.just_completed = False
+if "chat_history" not in st.session_state: st.session_state.chat_history = []
+if "chat_q_key" not in st.session_state: st.session_state.chat_q_key = None
+
+# ==========================================
+# サイドバー
+# ==========================================
+st.sidebar.title("メニュー")
+if st.sidebar.button("🏠 ホーム", use_container_width=True):
+    st.session_state.mode = "home"
+    st.rerun()
+
+if st.sidebar.button("📝 ランダム演習", use_container_width=True):
+    st.session_state.mode = "quiz"
+    st.session_state.quiz_mode = "random"
+    st.session_state.current_q = None
+    st.rerun()
+
+if st.sidebar.button("🛤️ 順番に解く（コース）", use_container_width=True):
+    st.session_state.mode = "seq_setup"
+    st.rerun()
+
+if st.sidebar.button("📊 成績リスト (年度別)", use_container_width=True):
+    st.session_state.mode = "dashboard"
+    st.rerun()
+
+if st.sidebar.button("🔍 タグ検索", use_container_width=True):
+    st.session_state.mode = "tag_search"
+    st.rerun()
+
+st.sidebar.markdown("<hr style='margin: 1em 0px; border: 0.5px solid #444;'/>", unsafe_allow_html=True)
+if st.sidebar.button("✨ AI問題追加 (自動)", use_container_width=True):
+    st.session_state.mode = "ai_add"
+    st.rerun()
+    
+st.sidebar.markdown("<br>", unsafe_allow_html=True)
+if st.sidebar.button("⚙️ 個人設定", use_container_width=True):
+    st.session_state.mode = "settings"
+    st.rerun()
+
+# ==========================================
+# メイン画面
+# ==========================================
+if not data and st.session_state.mode not in ["settings", "ai_add"]:
+    st.warning("まだ問題データが登録されていません．「✨ AI問題追加」からデータを登録してください．")
+else:
+    # --------------------------------------
+    # モード：ホーム
+    # --------------------------------------
+    if st.session_state.mode == "home":
+        if st.session_state.just_completed:
+            st.success("🎉 コースのすべての問題を解き終えました！お疲れ様でした！")
+            if conf.get("show_balloons", True): st.balloons()
+            st.session_state.just_completed = False
+
+        st.markdown("<h1 style='text-align: center;'>🏠 学習ホーム</h1>", unsafe_allow_html=True)
+        
+        target_date_str = conf.get("target_date", "2026-08-20")
+        exam_name = conf.get("exam_name", "大阪公立大学大学院 院試")
+        
+        target_date = datetime.datetime.strptime(target_date_str, "%Y-%m-%d").date()
+        today = datetime.date.today()
+        days_left = (target_date - today).days
+        
+        st.markdown(f"""
+        <div style="background-color: #1e1e2f; padding: 20px; border-radius: 10px; text-align: center; margin-bottom: 20px; border: 1px solid #444;">
+            <h2 style="margin: 0; color: #ddd;">{exam_name} まで</h2>
+            <h1 style="margin: 0; font-size: 3em; color: #ff4b4b;">あと {days_left} 日</h1>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # --- カウントダウンとTOEICスコアの設定 ---
+        with st.expander("⚙️ 目標設定（カウントダウン・TOEICスコア）", expanded=False):
+            new_name = st.text_input("目標名", value=exam_name)
+            new_date = st.date_input("目標日", value=target_date)
+            
+            toeic_val = conf.get("toeic_score", 0)
+            new_toeic = st.number_input("TOEICスコア (英語 100点満点への換算用)", min_value=0, max_value=990, value=toeic_val, step=5)
+            
+            if st.button("設定を保存"):
+                conf["exam_name"] = new_name
+                conf["target_date"] = new_date.strftime("%Y-%m-%d")
+                conf["toeic_score"] = new_toeic
+                save_config(conf)
+                st.success("保存しました！")
+                st.rerun()
+
+        # --- 各分野のスコア計算 (完璧=100%, 要復習=33%, 苦手=0%) ---
+        evals = load_evals()
+        
+        genre_scores = {"電気回路": 0.0, "電磁気": 0.0, "数学": 0.0}
+        genre_counts = {"電気回路": 0, "電磁気": 0, "数学": 0}
+        
+        for g, qs in evals.items():
+            if g in genre_scores:
+                for k, val in qs.items():
+                    rating = val.get("rating", "") if isinstance(val, dict) else (val if isinstance(val, str) else "")
+                    genre_counts[g] += 1
+                    if rating == "〇": genre_scores[g] += 100.0
+                    elif rating == "▲": genre_scores[g] += 33.0
+                    elif rating == "×": genre_scores[g] += 0.0
+        
+        final_genre_scores = {}
+        for g in genre_scores:
+            if genre_counts[g] > 0:
+                final_genre_scores[g] = genre_scores[g] / genre_counts[g]
+            else:
+                final_genre_scores[g] = 0.0
+                
+        # 英語のスコア換算 (TOEIC満点800点 → 100点満点)
+        english_score = (conf.get("toeic_score", 0) / 800.0) * 100.0
+        
+        # 総合スコア (400点満点)
+        total_score = final_genre_scores["電気回路"] + final_genre_scores["電磁気"] + final_genre_scores["数学"] + english_score
+
+        st.markdown("<h3 style='text-align: center;'>🎯 合格ボーダー分析 (400点満点)</h3>", unsafe_allow_html=True)
+        
+        # --- Plotlyで円グラフ（ゲージチャート）を描画 ---
+        fig = go.Figure(go.Indicator(
+            mode = "gauge+number",
+            value = total_score,
+            number = {'suffix': " 点", 'valueformat': ".1f"},
+            domain = {'x': [0, 1], 'y': [0, 1]},
+            title = {'text': "<b>現在の推定スコア</b><br><span style='color: gray; font-size:0.8em'>ボーダー: 240点 (得点率6割)</span>"},
+            gauge = {
+                'axis': {'range': [None, 400], 'tickwidth': 1, 'tickcolor': "white"},
+                'bar': {'color': "#ff4b4b" if total_score < 240 else "#00cc96"}, # ボーダー未満は赤、達成で緑
+                'bgcolor': "rgba(0,0,0,0)",
+                'borderwidth': 2,
+                'bordercolor': "gray",
+                'steps': [
+                    {'range': [0, 240], 'color': "rgba(255, 75, 75, 0.2)"},
+                    {'range': [240, 400], 'color': "rgba(0, 204, 150, 0.2)"}],
+                'threshold': {
+                    'line': {'color': "red", 'width': 4},
+                    'thickness': 0.75,
+                    'value': 240} # ボーダーの赤い線
+            }
+        ))
+        
+        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"}, height=350)
+        st.plotly_chart(fig, use_container_width=True)
+
+        # --- 各分野の詳細スコア表示 ---
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("⚡ 電気回路", f"{final_genre_scores['電気回路']:.1f} / 100")
+        col2.metric("🧲 電磁気", f"{final_genre_scores['電磁気']:.1f} / 100")
+        col3.metric("📐 数学", f"{final_genre_scores['数学']:.1f} / 100")
+        col4.metric("🔤 英語 (TOEIC)", f"{english_score:.1f} / 100")
+
+    # --------------------------------------
+    # モード：AI問題追加
+    # --------------------------------------
+    elif st.session_state.mode == "ai_add":
+        st.title("✨ AIで問題を全自動追加")
+        st.write("過去問の画像をアップロードするだけで，AIが解答を作成し，アプリに自動登録します！")
+        
+        if not conf.get("gemini_api_key"):
+            st.error("⚠️ AI機能を使用するには、「⚙️ 個人設定」から Gemini APIキー を設定してください。")
+            st.stop()
+            
+        col1, col2, col3 = st.columns(3)
+        with col1: add_year = st.text_input("年度 (例: 2024.8年度)", value="2024.8年度")
+        with col2: add_genre = st.selectbox("分野", GENRE_ORDER + ["その他"])
+        with col3: add_number = st.text_input("問題番号 (例: 問題1)", value="問題1")
+        
+        uploaded_file = st.file_uploader("問題の画像を選択してください (.png, .jpg)", type=["png", "jpg", "jpeg"])
+        
+        if uploaded_file is not None:
+            st.image(uploaded_file, width=400)
+            
+            if st.button("🤖 AIで解析して自動登録する", type="primary"):
+                with st.spinner("AIが解答を作成中... (約15〜30秒かかります)"):
+                    res_text = "（AIからの応答を取得する前にエラーが発生しました）" 
+                    try:
+                        os.makedirs("images", exist_ok=True)
+                        file_ext = uploaded_file.name.split('.')[-1]
+                        safe_year = add_year.replace("年度", "")
+                        safe_num = add_number.replace("問題", "")
+                        img_filename = f"{safe_year}_{add_genre}_{safe_num}.{file_ext}"
+                        img_path = os.path.join("images", img_filename).replace("\\", "/")
+                        
+                        with open(img_path, "wb") as f:
+                            f.write(uploaded_file.getbuffer())
+                            
+                        img = Image.open(uploaded_file)
+                        
+                        # エラー対策：最新モデルを指定し、失敗時は予備モデルを使用
+                        model = genai.GenerativeModel('gemini-pro')
+                        
+                        prompt = f"""
+                        以下の問題画像の解答・解説を作成し，指定されたJSONフォーマットのみを出力してください．余計な文章は一切不要です．
+                        
+                        【出力ルール・JSONキーの指定】
+                        ```json
+                        {{
+                          "{add_genre}": [
+                            {{
+                              "year": "{add_year}",
+                              "number": "{add_number}",
+                              "question_image": "{img_path}",
+                              "answer": "解答のテキスト",
+                              "tags": ["タグ1", "タグ2"]
+                            }}
+                          ]
+                        }}
+                        ```
+                        【LaTeX・テキストの厳格な記述ルール】
+                        - 計算の途中式を、あきらかな場合を除き明示すること．
+                        - 文章は日本語とし，句読点は「．」「，」を使用すること．
+                        - 解法に関するキーワードを3〜5個抽出し，`tags` に含めること．
+                        - 数式は必ず LaTeX 形式とし，文章中の数式は `$`，独立した数式ブロックは `$$` で正確に囲むこと．
+                        - $ や $$ の中に、日本語の文字を含めないこと．
+                        - JSONの仕様上、バックスラッシュは必ず2重にすること（例：\\\\frac）．行列の改行は \\\\\\\\ とすること．
+                        - 改行は \\n を記述すること．
+                        """
+                        
+                        response = model.generate_content([prompt, img])
+                        res_text = response.text
+                        
+                        if "```json" in res_text:
+                            res_text = res_text.split("```json")[1].split("```")[0].strip()
+                        elif "```" in res_text:
+                            res_text = res_text.split("```")[1].split("```")[0].strip()
+                            
+                        new_data = json.loads(res_text)
+                        
+                        for g, qs in new_data.items():
+                            if g not in data:
+                                data[g] = []
+                            data[g].extend(qs)
+                        
+                        save_data(data)
+                        st.success(f"🎉 自動登録が完了しました！ ({add_year} {add_genre} {add_number})")
+                        
+                    except Exception as e:
+                        st.error(f"AIとの通信中にエラーが発生しました: {e}")
+                        st.write("▼ 出力情報（エラーの手掛かり）:")
+                        st.write(res_text)
+
+    # --------------------------------------
+    # モード：個人設定
+    # --------------------------------------
+    elif st.session_state.mode == "settings":
+        st.markdown("<h1 style='text-align: center;'>⚙️ 個人設定</h1>", unsafe_allow_html=True)
+        
+        st.markdown("### 🤖 AI連携設定")
+        gemini_key = st.text_input("Gemini APIキー", value=conf.get("gemini_api_key", ""), type="password")
+        st.caption("AIチャットや自動問題追加機能を使用するために必要です。[Google AI Studio](https://aistudio.google.com/) から無料で取得できます。")
+
+        st.markdown("<hr style='margin: 1em 0px; border: 0.5px solid #444;'/>", unsafe_allow_html=True)
+        st.markdown("### 👁️ 見た目の設定")
+        col_s1, col_s2 = st.columns(2)
+        with col_s1:
+            font_size_list = ["標準", "大きめ", "特大"]
+            curr_fsize = conf.get("font_size", "標準")
+            font_size = st.radio("文字サイズ（問題文・解答・数式）", font_size_list, index=font_size_list.index(curr_fsize) if curr_fsize in font_size_list else 0)
+        with col_s2:
+            font_fam_list = ["標準 (ゴシック体)", "明朝体 (試験本番風)"]
+            curr_ffam = conf.get("font_family", "標準 (ゴシック体)")
+            font_family = st.radio("文字の書体", font_fam_list, index=font_fam_list.index(curr_ffam) if curr_ffam in font_fam_list else 0)
+            
+        img_width = st.slider("問題画像の表示サイズ (px)", min_value=300, max_value=1200, value=conf.get("image_width", 700), step=50)
+        
+        st.markdown("<hr style='margin: 1em 0px; border: 0.5px solid #444;'/>", unsafe_allow_html=True)
+        st.markdown("### 🛠️ 動作の設定")
+        
+        startup_list = ["ホーム", "ランダム演習", "成績リスト"]
+        curr_startup = conf.get("startup_mode", "ホーム")
+        startup_mode = st.selectbox("アプリ起動時に最初に表示する画面", startup_list, index=startup_list.index(curr_startup) if curr_startup in startup_list else 0)
+        show_balloons = st.checkbox("コース完了時に達成のお祝い（風船アニメーション）を表示する", value=conf.get("show_balloons", True))
+        
+        st.markdown("<hr style='margin: 1em 0px; border: 0.5px solid #444;'/>", unsafe_allow_html=True)
+        st.markdown("### 🏷️ タグの整理・統合")
+        st.write("似たようなタグを一つにまとめたり，名前を変更したりできます．")
+        
+        # 全タグの取得
+        all_tags_for_edit = set()
+        evals_for_edit = load_evals()
+        for g, qs in data.items():
+            for q in qs:
+                q_k = f"{q.get('year', '')}_{q.get('number', '')}"
+                r_data = evals_for_edit.get(g, {}).get(q_k)
+                if isinstance(r_data, dict):
+                    all_tags_for_edit.update(r_data.get("tags", []))
+                else:
+                    all_tags_for_edit.update(q.get("tags", []))
+
+        if all_tags_for_edit:
+            st.write("▼ 現在の全タグ（右上のコピーボタンを押して、私に送ってください！）")
+            st.code(", ".join(sorted(list(all_tags_for_edit))))
+        
+        if all_tags_for_edit:
+            all_tags_list = sorted(list(all_tags_for_edit))
+            
+            # --- 変更点：複数選択できるようにしました ---
+            old_tags = st.multiselect("まとめたい古いタグを選んでください（複数選択可）", all_tags_list)
+            new_tag = st.text_input("新しいタグ名（統合先）", placeholder="例：微分方程式")
+            
+            if st.button("選択したタグをまとめて書き換える", type="primary"):
+                if old_tags and new_tag.strip() != "":
+                    # questions.json の書き換え
+                    for g in data:
+                        for q in data[g]:
+                            # 選んだ古いタグのどれかが含まれていたら書き換える
+                            if any(t in q.get("tags", []) for t in old_tags):
+                                q["tags"] = [new_tag if t in old_tags else t for t in q["tags"]]
+                                q["tags"] = list(dict.fromkeys(q["tags"])) # 重複を削除して綺麗にする
+                    save_data(data)
+                    
+                    # evaluations.json の書き換え
+                    for g in evals_for_edit:
+                        for k in evals_for_edit[g]:
+                            if isinstance(evals_for_edit[g][k], dict) and any(t in evals_for_edit[g][k].get("tags", []) for t in old_tags):
+                                evals_for_edit[g][k]["tags"] = [new_tag if t in old_tags else t for t in evals_for_edit[g][k]["tags"]]
+                                evals_for_edit[g][k]["tags"] = list(dict.fromkeys(evals_for_edit[g][k]["tags"]))
+                    save_evals(evals_for_edit)
+                    
+                    st.success(f"選択したタグを「{new_tag}」にまとめて統合しました！")
+                    st.rerun()
+                elif not old_tags:
+                    st.warning("まとめたい古いタグを選択してください．")
+                elif new_tag.strip() == "":
+                    st.warning("新しいタグ名を入力してください．")
+
+        # --- ここから追加：クラウド移行用の一時ボタン ---
+        st.markdown("<hr style='margin: 1em 0px; border: 0.5px solid #444;'/>", unsafe_allow_html=True)
+        st.markdown("### ☁️ クラウドへのデータ移行")
+        st.write("手元の questions.json をデータベースにアップロードします．")
+        
+        if st.button("データをクラウドに移行する", type="primary"):
+            import os
+            import json
+            if os.path.exists("questions.json"):
+                with open("questions.json", "r", encoding="utf-8") as f:
+                    q_data = json.load(f)
+                    db.reference('app_data/all_questions').set(q_data)
+                st.success("🎉 問題データの移行が完了しました！アプリを更新すると問題が表示されます！")
+            else:
+                st.error("⚠️ questions.json が見つかりませんでした．")
+        # --- ここまで追加 ---
+
+        st.write("")
+        if st.button("設定を保存する", type="primary", use_container_width=True):
+            conf["gemini_api_key"] = gemini_key
+            conf["font_size"] = font_size
+            conf["font_family"] = font_family
+            conf["image_width"] = img_width
+            conf["startup_mode"] = startup_mode
+            conf["show_balloons"] = show_balloons
+            save_config(conf)
+            st.success("設定を保存しました！")
+            st.rerun()
+
+    # --------------------------------------
+    # モード：順番に解く（コース設定）
+    # --------------------------------------
+    elif st.session_state.mode == "seq_setup":
+        st.markdown("<h1 style='text-align: center;'>🛤️ 順番に解くコースの設定</h1>", unsafe_allow_html=True)
+        st.markdown("<div style='text-align: center;'>設定したルールに従って，次々と問題を出題します．</div>", unsafe_allow_html=True)
+        st.markdown("<hr style='margin: 1em 0px; border: 0.5px solid #444;'/>", unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            seq_type = st.radio("順番の進め方", ["年度ごとに解く（例：2024年度の電気回路 → 電磁気 → 数学）", "分野ごとに解く（例：電気回路の全年度 → 電磁気の全年度）"])
+        with col2:
+            order_type = st.radio("年度の順番", ["古い順（過去から順番に）", "新しい順（直近から順番に）"])
+            
+        st.write("")
+        if st.button("🚀 このコースでスタート！", type="primary", use_container_width=True):
+            seq = [{"genre": g, "q": q} for g, qs in data.items() for q in qs]
+            direction = -1 if order_type == "新しい順（直近から順番に）" else 1
+            if "年度ごとに" in seq_type:
+                seq.sort(key=lambda x: (direction * extract_year_val(x["q"]["year"]), get_genre_idx(x["genre"]), extract_num(x["q"]["number"])))
+            else:
+                seq.sort(key=lambda x: (get_genre_idx(x["genre"]), direction * extract_year_val(x["q"]["year"]), extract_num(x["q"]["number"])))
+                
+            st.session_state.seq_list = seq
+            st.session_state.seq_idx = 0
+            st.session_state.quiz_mode = "sequential"
+            
+            if seq:
+                nxt = seq[0]
+                st.session_state.current_genre = nxt["genre"]
+                st.session_state.current_q = nxt["q"]
+                st.session_state.mode = "quiz"
+                st.session_state.show_answer = False
+                st.rerun()
+            else:
+                st.error("問題が存在しません．")
+
+    # --------------------------------------
+    # モード：タグ検索
+    # --------------------------------------
+    elif st.session_state.mode == "tag_search":
+        st.markdown("<h1 style='text-align: center;'>🔍 タグ検索 ＆ 分析</h1>", unsafe_allow_html=True)
+        evals = load_evals()
+        
+        # --- 追加機能：タグの統計情報を集計 ---
+        tag_stats = {}
+        for genre, questions in data.items():
+            for q in questions:
+                q_key = f"{q.get('year', '')}_{q.get('number', '')}"
+                rating_data = evals.get(genre, {}).get(q_key)
+                
+                if rating_data is None: rating, tags = "", q.get("tags", [])
+                elif isinstance(rating_data, str): rating, tags = rating_data, q.get("tags", [])
+                else: rating, tags = rating_data.get("rating", ""), rating_data.get("tags", [])
+                
+                for t in tags:
+                    if t not in tag_stats:
+                        tag_stats[t] = {"count": 0, "〇": 0, "▲": 0, "×": 0, "未": 0}
+                    tag_stats[t]["count"] += 1
+                    if rating == "〇": tag_stats[t]["〇"] += 1
+                    elif rating == "▲": tag_stats[t]["▲"] += 1
+                    elif rating == "×": tag_stats[t]["×"] += 1
+                    else: tag_stats[t]["未"] += 1
+                
+        if not tag_stats:
+            st.info("まだタグが登録されていません．")
+        else:
+            all_tags_list = sorted(list(tag_stats.keys()))
+            
+            # --- 新規追加：タグ一覧と分析データ表 ---
+            with st.expander("📊 タグごとの問題数・正答率データを見る", expanded=True):
+                st.write("💡 **表の上の見出し（「問題数」や「正答率」など）をクリックすると，並び替えができます！**")
+                
+                table_data = []
+                for t, stats in tag_stats.items():
+                    total_eval = stats["〇"] + stats["▲"] + stats["×"]
+                    acc = (stats["〇"] / total_eval * 100) if total_eval > 0 else 0.0
+                    table_data.append({
+                        "タグ名": t,
+                        "問題数": stats["count"],
+                        "正答率 (%)": round(acc, 1),
+                        "🟢 完璧": stats["〇"],
+                        "🟡 復習": stats["▲"],
+                        "🔴 苦手": stats["×"],
+                        "⚪ 未評価": stats["未"]
+                    })
+                
+                # データフレーム（表）として表示
+                st.dataframe(table_data, use_container_width=True, hide_index=True)
+
+            st.markdown("<hr style='margin: 0.5em 0px; border: 1px solid #555;'/>", unsafe_allow_html=True)
+            
+            # --- 既存の検索機能 ---
+            default_idx = all_tags_list.index(st.session_state.selected_tag) if st.session_state.selected_tag in all_tags_list else 0
+                
+            selected_tag = st.selectbox("検索するタグを選んでください", all_tags_list, index=default_idx)
+            st.session_state.selected_tag = selected_tag
+            
+            st.markdown(f"<h3 style='text-align: center;'>🏷️ 「{selected_tag}」の検索結果</h3>", unsafe_allow_html=True)
+            st.markdown("<hr style='margin: 0.5em 0px; border: 1px solid #555;'/>", unsafe_allow_html=True)
+            
+            found = False
+            for genre in sorted(list(data.keys()), key=get_genre_idx):
+                questions = data[genre]
+                sorted_qs = sorted(questions, key=lambda x: (-extract_year_val(x.get('year', '')), extract_num(x.get('number', ''))))
+                
+                for q in sorted_qs:
+                    q_key = f"{q.get('year', '')}_{q.get('number', '')}"
+                    rating_data = evals.get(genre, {}).get(q_key)
+                    
+                    if rating_data is None: rating, tags = "", q.get("tags", [])
+                    elif isinstance(rating_data, str): rating, tags = rating_data, q.get("tags", [])
+                    else: rating, tags = rating_data.get("rating", ""), rating_data.get("tags", [])
+                        
+                    if selected_tag in tags:
+                        found = True
+                        rating_icons = {"〇": "🟢 完璧", "▲": "🟡 復習", "×": "🔴 苦手"}
+                        status_text = rating_icons.get(rating, "⚪ 未評価")
+                        
+                        col1, col2, col3 = st.columns([2, 6, 2])
+                        with col1: st.write(f"**{status_text}**")
+                        with col2:
+                            st.write(f"**{q.get('year', '')} {genre} - {q.get('number', '')}**")
+                            if tags:
+                                # デザインされたタグを表示
+                                html = '<div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px;">'
+                                for t in tags:
+                                    html += f'<span style="background: linear-gradient(135deg, #8a2be2, #4b0082); color: white; padding: 5px 15px; border-radius: 20px; font-size: 14px; border: 1px solid #bda0cb; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">{t}</span>'
+                                html += '</div>'
+                                st.markdown(html, unsafe_allow_html=True)
+                        with col3:
+                            if st.button("この問題を解く", key=f"tag_search_{genre}_{q_key}", use_container_width=True):
+                                st.session_state.mode = "quiz"
+                                st.session_state.quiz_mode = "random" 
+                                st.session_state.current_genre = genre
+                                st.session_state.current_q = q
+                                st.session_state.show_answer = False
+                                st.rerun()
+                        st.markdown("<hr style='margin: 0.2em 0px; border: 0.5px solid #444;'/>", unsafe_allow_html=True)
+            if not found:
+                st.write("該当する問題は見つかりませんでした．")
+
+    # --------------------------------------
+    # モード：成績リスト（年度別）＆ リセット復元
+    # --------------------------------------
+    elif st.session_state.mode == "dashboard":
+        st.markdown("<h1 style='text-align: center;'>成績リスト (年度別)</h1>", unsafe_allow_html=True)
+        st.info("**【凡例】** 🟢: 完璧 (〇) ｜ 🟡: 復習が必要 (▲) ｜ 🔴: 苦手 (×) ｜ ⚪: 未評価")
+        
+        col_title, col_reset = st.columns([6, 4])
+        with col_title:
+            st.write("年度ごとのボタンから，その年の通し演習や特定の分野のみの演習を直接スタートできます．")
+        with col_reset:
+            with st.expander("🚨 データのリセット", expanded=False):
+                if st.button("📄 評価 (〇▲×) のみリセット", use_container_width=True):
+                    evals = load_evals()
+                    for g in evals:
+                        for k in evals[g]:
+                            if isinstance(evals[g][k], dict):
+                                evals[g][k]["rating"] = ""
+                            else:
+                                evals[g][k] = {"rating": "", "tags": []}
+                    save_evals(evals)
+                    st.success("評価のみをリセットしました．")
+                    st.rerun()
+                
+        evals = load_evals()
+        
+        # すべての年度を抽出して降順にソート
+        all_years = set()
+        for qs in data.values():
+            for q in qs:
+                all_years.add(str(q.get('year', '')))
+        sorted_years = sorted(list(all_years), key=extract_year_val, reverse=True)
+        
+        for year in sorted_years:
+            y_qs = []
+            for g in GENRE_ORDER:
+                if g in data:
+                    for q in data[g]:
+                        if str(q.get('year', '')) == year:
+                            y_qs.append((g, q))
+            
+            if not y_qs: continue
+            
+            counts = {"〇": 0, "▲": 0, "×": 0, "未": 0}
+            for g, q in y_qs:
+                q_key = f"{q.get('year', '')}_{q.get('number', '')}"
+                rating_data = evals.get(g, {}).get(q_key)
+                if rating_data is None: r = ""
+                elif isinstance(rating_data, str): r = rating_data
+                else: r = rating_data.get("rating", "")
+                
+                if r == "〇": counts["〇"] += 1
+                elif r == "▲": counts["▲"] += 1
+                elif r == "×": counts["×"] += 1
+                else: counts["未"] += 1
+            
+            total_y = len(y_qs)
+            p_maru = int((counts["〇"] / total_y) * 100) if total_y > 0 else 0
+            p_sankaku = int((counts["▲"] / total_y) * 100) if total_y > 0 else 0
+            p_batsu = int((counts["×"] / total_y) * 100) if total_y > 0 else 0
+            
+            with st.expander(f"📚 {year} (全{total_y}問) ｜ 達成率: 🟢 {p_maru}%  🟡 {p_sankaku}%  🔴 {p_batsu}%", expanded=True):
+                
+                st.write("**🔽 この年度の演習を開始する**")
+                btn_cols = st.columns(4)
+                
+                if btn_cols[0].button("🚀 年度全体を通しで解く", key=f"play_all_{year}", use_container_width=True):
+                    st.session_state.seq_list = [{"genre": g, "q": q} for g, q in y_qs]
+                    st.session_state.seq_idx = 0
+                    st.session_state.quiz_mode = "sequential"
+                    st.session_state.current_genre = st.session_state.seq_list[0]["genre"]
+                    st.session_state.current_q = st.session_state.seq_list[0]["q"]
+                    st.session_state.mode = "quiz"
+                    st.session_state.show_answer = False
+                    st.rerun()
+                
+                for idx, g_name in enumerate(GENRE_ORDER):
+                    with btn_cols[idx+1]:
+                        g_qs = [item for item in y_qs if item[0] == g_name]
+                        if g_qs:
+                            if st.button(f"📘 {g_name}のみ", key=f"play_{year}_{g_name}", use_container_width=True):
+                                st.session_state.seq_list = [{"genre": g, "q": q} for g, q in g_qs]
+                                st.session_state.seq_idx = 0
+                                st.session_state.quiz_mode = "sequential"
+                                st.session_state.current_genre = st.session_state.seq_list[0]["genre"]
+                                st.session_state.current_q = st.session_state.seq_list[0]["q"]
+                                st.session_state.mode = "quiz"
+                                st.session_state.show_answer = False
+                                st.rerun()
+                        else:
+                            st.button(f"📘 {g_name} (なし)", key=f"play_none_{year}_{g_name}", disabled=True, use_container_width=True)
+                
+                st.markdown("<hr style='margin: 0.5em 0px; border: 1px solid #555;'/>", unsafe_allow_html=True)
+                
+                p_nums = sorted(list(set([str(q.get('number', '')) for _, q in y_qs])), key=extract_num)
+                col_widths = [1.5] + [1] * len(p_nums)
+                header_cols = st.columns(col_widths)
+                
+                header_cols[0].markdown("<div style='text-align: center; color: #888;'><b>分野</b></div>", unsafe_allow_html=True)
+                for i, p_num in enumerate(p_nums):
+                    header_cols[i+1].markdown(f"<div style='text-align: center; color: #888;'><b>{p_num}</b></div>", unsafe_allow_html=True)
+                
+                st.markdown("<hr style='margin: 0.5em 0px; border: 1px solid #555;'/>", unsafe_allow_html=True)
+                
+                for g_name in GENRE_ORDER:
+                    if not any(g == g_name for g, _ in y_qs):
+                        continue
+                        
+                    row_cols = st.columns(col_widths)
+                    row_cols[0].markdown(f"<div style='padding-top: 10px; font-weight: bold;'>{g_name}</div>", unsafe_allow_html=True)
+                    
+                    for i, p_num in enumerate(p_nums):
+                        q_match = next((q for g, q in y_qs if g == g_name and str(q.get('number', '')) == p_num), None)
+                        
+                        with row_cols[i+1]:
+                            if q_match:
+                                q_key = f"{q_match.get('year', '')}_{q_match.get('number', '')}"
+                                rating_data = evals.get(g_name, {}).get(q_key)
+                                
+                                if rating_data is None: rating, tags = "", q_match.get("tags", [])
+                                elif isinstance(rating_data, str): rating, tags = rating_data, q_match.get("tags", [])
+                                else: rating, tags = rating_data.get("rating", ""), rating_data.get("tags", [])
+                                
+                                rating_icons = {"〇": "🟢", "▲": "🟡", "×": "🔴"}
+                                btn_label = rating_icons.get(rating, "⚪")
+                                tooltip_text = f"タグ: {', '.join(tags)}" if tags else "タグなし"
+                                
+                                if st.button(btn_label, key=f"btn_matrix_{year}_{g_name}_{q_key}", use_container_width=True, help=tooltip_text):
+                                    st.session_state.mode = "quiz"
+                                    st.session_state.quiz_mode = "random"
+                                    st.session_state.current_genre = g_name
+                                    st.session_state.current_q = q_match
+                                    st.session_state.show_answer = False
+                                    st.rerun()
+                            else:
+                                st.markdown("<div style='text-align: center; color: #555; padding-top: 10px;'>-</div>", unsafe_allow_html=True)
+                    st.markdown("<hr style='margin: 0.2em 0px; border: 0.5px dashed #444;'/>", unsafe_allow_html=True)
+
+    # --------------------------------------
+    # モード：出題 ＆ AIチャット
+    # --------------------------------------
+    elif st.session_state.mode == "quiz":
+        if st.session_state.quiz_mode == "sequential":
+            st.markdown(f"<h1 style='text-align: center;'>🛤️ コース演習 ({st.session_state.seq_idx + 1} / {len(st.session_state.seq_list)}問目)</h1>", unsafe_allow_html=True)
+            current_genre = st.session_state.current_genre
+        else:
+            st.markdown("<h1 style='text-align: center;'>過去問演習 (ランダム/単発)</h1>", unsafe_allow_html=True)
+            genre_list = sorted(list(data.keys()), key=get_genre_idx)
+            default_idx = genre_list.index(st.session_state.current_genre) if st.session_state.current_genre in genre_list else 0
+            
+            col_sel1, col_sel2, col_sel3 = st.columns([1, 2, 1])
+            with col_sel2:
+                current_genre = st.selectbox("分野を選択してください", genre_list, index=default_idx)
+            
+            if st.session_state.current_q is None or st.session_state.current_genre != current_genre:
+                st.session_state.current_genre = current_genre
+                st.session_state.current_q = random.choice(data[current_genre])
+                st.session_state.show_answer = False
+
+        q = st.session_state.current_q
+        q_key = f"{q.get('year', '')}_{q.get('number', '')}"
+        
+        if st.session_state.chat_q_key != q_key:
+            st.session_state.chat_history = []
+            st.session_state.chat_q_key = q_key
+        
+        st.markdown(f"<h3 style='text-align: center;'>【出題】{q.get('year', '')} {current_genre} - {q.get('number', '')}</h3>", unsafe_allow_html=True)
+        
+        if os.path.exists(q.get("question_image", "")):
+            img_width = conf.get("image_width", 700)
+            col_img1, col_img2, col_img3 = st.columns([1, 4, 1])
+            with col_img2: st.image(q.get("question_image", ""), width=img_width)
+        
+        if not st.session_state.show_answer:
+            st.write("") 
+            col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
+            with col_btn2:
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("解答を表示する", type="primary", use_container_width=True): 
+                        st.session_state.show_answer = True; st.rerun()
+                with c2:
+                    btn_skip_text = "スキップ ⏭️" if st.session_state.quiz_mode == "random" or st.session_state.seq_idx < len(st.session_state.seq_list) - 1 else "ホームに戻る 🏠"
+                    if st.button(btn_skip_text, use_container_width=True):
+                        if st.session_state.quiz_mode == "random":
+                            st.session_state.current_q = random.choice(data[current_genre]); st.session_state.show_answer = False; st.rerun()
+                        elif st.session_state.quiz_mode == "sequential":
+                            st.session_state.seq_idx += 1
+                            if st.session_state.seq_idx < len(st.session_state.seq_list):
+                                nxt = st.session_state.seq_list[st.session_state.seq_idx]
+                                st.session_state.current_genre = nxt["genre"]; st.session_state.current_q = nxt["q"]; st.session_state.show_answer = False; st.rerun()
+                            else:
+                                st.session_state.just_completed = True; st.session_state.mode = "home"; st.rerun()
+        
+        else:
+            st.markdown("---")
+            st.markdown("<h3 style='text-align: center;'>【解答・解説】</h3>", unsafe_allow_html=True)
+            ans_text = q.get("answer", "")
+            if isinstance(ans_text, str): ans_text = ans_text.replace("\\n", "\n")
+            
+            col_ans1, col_ans2, col_ans3 = st.columns([1, 6, 1])
+            with col_ans2: st.markdown(ans_text)
+            
+            st.markdown("---")
+            st.markdown("<h3 style='text-align: center;'>💬 AI家庭教師に質問する</h3>", unsafe_allow_html=True)
+            
+            if not conf.get("gemini_api_key"):
+                st.warning("AI家庭教師を利用するには、「⚙️ 個人設定」からGemini APIキーを設定してください。")
+            else:
+                col_chat1, col_chat2, col_chat3 = st.columns([1, 6, 1])
+                with col_chat2:
+                    for chat in st.session_state.chat_history:
+                        if chat["role"] == "user":
+                            st.markdown(f"**あなた:** {chat['text']}")
+                        else:
+                            st.markdown(f"**AI先生:** {chat['text']}")
+                            
+                    with st.form("chat_form", clear_on_submit=True):
+                        user_input = st.text_input("この問題について分からない部分を質問してください:")
+                        submitted = st.form_submit_button("質問する 🚀")
+                        
+                        if submitted and user_input:
+                            st.session_state.chat_history.append({"role": "user", "text": user_input})
+                            
+                            with st.spinner("AI先生が考え中..."):
+                                try:
+                                    # エラー対策：最新モデルを指定し、失敗時は予備モデルを使用
+                                    model = genai.GenerativeModel('gemini-pro')
+                                        
+                                    context_prompt = f"あなたは親切な大学の先生です。以下の過去問の解答について生徒から質問が来ました。\n\n【解答解説】\n{ans_text}\n\n【生徒からの質問】\n{user_input}\n\n数式はLaTeX形式で、句読点は「．」「，」を使用し、生徒が理解できるように分かりやすく教えてください。"
+                                    
+                                    if os.path.exists(q.get("question_image", "")):
+                                        img = Image.open(q.get("question_image", ""))
+                                        response = model.generate_content([context_prompt, img])
+                                    else:
+                                        response = model.generate_content(context_prompt)
+                                        
+                                    st.session_state.chat_history.append({"role": "ai", "text": response.text})
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"AIとの通信中にエラーが発生しました: {e}")
+
+            st.markdown("---")
+            
+            st.markdown("<h3 style='text-align: center;'>自己評価 ＆ タグ付け</h3>", unsafe_allow_html=True)
+            evals = load_evals()
+            rating_data = evals.get(current_genre, {}).get(q_key)
+            if rating_data is None: rating, current_tags = "", q.get("tags", [])
+            elif isinstance(rating_data, str): rating, current_tags = rating_data, q.get("tags", [])
+            else: rating, current_tags = rating_data.get("rating", ""), rating_data.get("tags", [])
+
+            col_eval1, col_eval2, col_eval3 = st.columns([1, 4, 1])
+            with col_eval2:
+                if current_tags:
+                    st.write("🏷️ **登録済みのタグ：**")
+                    render_beautiful_tags(current_tags)
+                
+                options = ["〇 (完璧)", "▲ (復習が必要)", "× (全くわからなかった)"]
+                default_radio_idx = 1 if rating == "▲" else (2 if rating == "×" else 0)
+                selected_rating = st.radio("この問題の理解度は？", options, index=default_radio_idx, horizontal=True)
+                
+                current_tags_str = ", ".join(current_tags)
+                input_tags_str = st.text_input("🏷️ 新しいタグを追加（カンマ区切りで入力）", value=current_tags_str)
+                
+                st.write("")
+                btn_text = "評価とタグを保存して次の問題へ" if st.session_state.quiz_mode == "random" or st.session_state.seq_idx < len(st.session_state.seq_list) - 1 else "評価を保存してコース完了！"
+                
+                if st.button(btn_text, type="primary", use_container_width=True):
+                    if current_genre not in evals: evals[current_genre] = {}
+                    new_tags = [t.strip() for t in input_tags_str.split(",") if t.strip()]
+                    evals[current_genre][q_key] = {"rating": selected_rating[0], "tags": new_tags}
+                    save_evals(evals)
+                    
+                    if st.session_state.quiz_mode == "random":
+                        st.session_state.current_q = random.choice(data[current_genre]); st.session_state.show_answer = False; st.rerun()
+                    elif st.session_state.quiz_mode == "sequential":
+                        st.session_state.seq_idx += 1
+                        if st.session_state.seq_idx < len(st.session_state.seq_list):
+                            nxt = st.session_state.seq_list[st.session_state.seq_idx]
+                            st.session_state.current_genre = nxt["genre"]; st.session_state.current_q = nxt["q"]; st.session_state.show_answer = False; st.rerun()
+                        else:
+                            st.session_state.just_completed = True; st.session_state.mode = "home"; st.rerun()

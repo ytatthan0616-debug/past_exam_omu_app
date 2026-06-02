@@ -1,0 +1,5 @@
+streamlit
+google-generativeai
+pillow
+plotly
+firebase-admin
