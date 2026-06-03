@@ -21,6 +21,7 @@ if not firebase_admin._apps:
     })
 # --- クラウドデータベース用の読み書き関数 (Realtime DB版) ---
 
+@st.cache_data
 def load_data():
     ref = db.reference('app_data/all_questions')
     data = ref.get()
@@ -29,7 +30,9 @@ def load_data():
 def save_data(data_dict):
     ref = db.reference('app_data/all_questions')
     ref.set(data_dict)
+    st.cache_data.clear()
 
+@st.cache_data
 def load_evals():
     username = st.session_state.get("username", "Guest")
     ref = db.reference(f'users/{username}/evals')
@@ -57,6 +60,7 @@ def save_evals(evals):
             safe_k = k.replace('.', '．').replace('#', '＃')
             safe_evals[g][safe_k] = v
     ref.set(safe_evals)
+    st.cache_data.clear()
 
 def load_config():
     username = st.session_state.get("username", "Guest")
@@ -709,8 +713,65 @@ else:
     # モード：順番に解く（コース設定）
     # --------------------------------------
     elif st.session_state.mode == "seq_setup":
-        st.markdown("<h1 style='text-align: center;'>🛤️ 順番に解くコースの設定</h1>", unsafe_allow_html=True)
-        st.markdown("<div style='text-align: center;'>設定したルールに従って，次々と問題を出題します．</div>", unsafe_allow_html=True)
+        st.markdown("<h2 style='text-align: center;'>🚂 カスタム・シーケンシャルコース</h2>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center;'>開始問題や出題数を指定して、特定範囲を集中特訓します．</p>", unsafe_allow_html=True)
+
+        col_s1, col_s2 = st.columns(2)
+        with col_s1:
+            # 1. 分野の選択
+            target_genre = st.selectbox("📁 集中する分野", GENRE_ORDER)
+            
+            # 選択された分野の問題リストを取得し、年度・問題番号順にソート
+            q_list = sorted(data.get(target_genre, []), key=lambda x: (x.get('year', ''), x.get('number', '')))
+            q_options = [f"{q.get('year', '')} {q.get('number', '')}" for q in q_list]
+            
+            # 2. 開始問題の選択
+            if q_options:
+                start_q_str = st.selectbox("📍 開始問題（ここからスタート）", q_options)
+            else:
+                start_q_str = None
+                st.warning("この分野にはまだ問題が登録されていません．")
+
+        with col_s2:
+            # 3. 昇順・降順の選択
+            order = st.radio("⏱️ 進む方向", ["昇順 (過去から最新へ進む)", "降順 (最新から過去へ遡る)"])
+            
+            # 4. 出題数の指定
+            max_q_count = len(q_list)
+            if max_q_count > 0:
+                num_questions = st.number_input("🎯 出題数", min_value=1, max_value=max_q_count, value=min(5, max_q_count))
+            else:
+                num_questions = 0
+
+        st.write("")
+        if st.button("🚂 この設定でスタート！", type="primary", use_container_width=True, disabled=(max_q_count == 0)):
+            # 昇順か降順かでリストの並びを決定
+            is_reverse = (order == "降順 (最新から過去へ遡る)")
+            sorted_q_list = sorted(data[target_genre], key=lambda x: (x.get('year', ''), x.get('number', '')), reverse=is_reverse)
+            
+            # 開始問題のインデックス（何番目か）を探す
+            start_idx = 0
+            for i, q in enumerate(sorted_q_list):
+                if f"{q.get('year', '')} {q.get('number', '')}" == start_q_str:
+                    start_idx = i
+                    break
+                    
+            # 開始位置から指定された問題数だけリストを切り取る
+            selected_qs = sorted_q_list[start_idx : start_idx + num_questions]
+            
+            # 出題用リスト（seq_list）を作成
+            st.session_state.seq_list = [{"genre": target_genre, "q": q} for q in selected_qs]
+            st.session_state.seq_idx = 0
+            st.session_state.quiz_mode = "sequential"
+            
+            # 最初の問題をセットしてクイズ画面へ
+            first_q = st.session_state.seq_list[0]
+            st.session_state.current_genre = first_q["genre"]
+            st.session_state.current_q = first_q["q"]
+            st.session_state.show_answer = False
+            st.session_state.ai_generated_answer = None
+            st.session_state.mode = "quiz"
+            st.rerun()
         st.markdown("<hr style='margin: 1em 0px; border: 0.5px solid #444;'/>", unsafe_allow_html=True)
         
         col1, col2 = st.columns(2)
