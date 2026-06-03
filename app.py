@@ -62,6 +62,24 @@ def save_evals(evals):
     ref.set(safe_evals)
     st.cache_data.clear()
 
+# （既存の save_evals の下に追加します）
+
+def update_single_eval(genre, q_key, single_eval_data):
+    """1問の成績データだけをピンポイントでFirebaseに保存（通信量節約）"""
+    username = st.session_state.get("username", "Guest")
+    
+    # Firebaseで禁止されている半角記号を全角に変換
+    safe_k = q_key.replace('.', '．').replace('#', '＃')
+    
+    # 💡 ポイント：大元の evals フォルダではなく、その問題の住所を直接指定する
+    ref = db.reference(f'users/{username}/evals/{genre}/{safe_k}')
+    
+    # その問題のデータだけを上書き
+    ref.set(single_eval_data)
+    
+    # 画面に最新状態を反映させるためキャッシュをリセット
+    st.cache_data.clear()
+
 def load_config():
     username = st.session_state.get("username", "Guest")
     ref = db.reference(f'users/{username}/config')
@@ -1307,9 +1325,18 @@ else:
                 
                 if st.button(btn_text, type="primary", use_container_width=True):
                     if current_genre not in evals: evals[current_genre] = {}
-                    new_tags = [t.strip() for t in input_tags_str.split(",") if t.strip()]
-                    evals[current_genre][q_key] = {"rating": selected_rating[0], "tags": new_tags}
-                    save_evals(evals)
+                    new_tags = [t.strip() for t in input_tags_str.split("，") if t.strip()]  # カンマも全角半角両方対応しておくと安全です
+                    if not new_tags: # 半角カンマの場合のフォールバック
+                        new_tags = [t.strip() for t in input_tags_str.split(",") if t.strip()]
+            
+                    # 1. 保存するデータをまとめる
+                    eval_data = {"rating": selected_rating[0], "tags": new_tags}
+        
+                    # 2. ローカル（手元の画面用）のデータを更新する
+                    evals[current_genre][q_key] = eval_data
+        
+                    # 3. 💡 ここが最大の変更点：Firebaseには「この1問だけ」をピンポイントで送信する！
+                    update_single_eval(current_genre, q_key, eval_data)
                     
                     if st.session_state.quiz_mode == "random":
                         st.session_state.current_q = random.choice(data[current_genre]); st.session_state.show_answer = False; st.rerun()
