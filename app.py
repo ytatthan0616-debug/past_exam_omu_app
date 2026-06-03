@@ -520,7 +520,7 @@ else:
                         img = Image.open(uploaded_file)
                         
                         # エラー対策：最新モデルを指定し、失敗時は予備モデルを使用
-                        model = genai.GenerativeModel('gemini-pro')
+                        model = genai.GenerativeModel('gemini-3.1-flash-lite')
                         
                         prompt = f"""
                         以下の問題画像の解答・解説を作成し，指定されたJSONフォーマットのみを出力してください．余計な文章は一切不要です．
@@ -1004,6 +1004,7 @@ else:
         if st.session_state.chat_q_key != q_key:
             st.session_state.chat_history = []
             st.session_state.chat_q_key = q_key
+            st.session_state.ai_generated_answer = None
         
         global_stats = get_global_q_stats()
         diff_ui = get_difficulty_ui(q_key, global_stats)
@@ -1018,32 +1019,93 @@ else:
         if not st.session_state.show_answer:
             st.write("") 
             col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
+    
             with col_btn2:
-                c1, c2 = st.columns(2)
+                c1, c2, c3 = st.columns(3)
+        
                 with c1:
                     if st.button("解答を表示する", type="primary", use_container_width=True): 
-                        st.session_state.show_answer = True; st.rerun()
+                        st.session_state.show_answer = True
+                        st.rerun()
+
                 with c2:
+                    gen_ai = st.button("🤖 AIで解説生成", use_container_width=True)
+
+                with c3:
                     btn_skip_text = "スキップ ⏭️" if st.session_state.quiz_mode == "random" or st.session_state.seq_idx < len(st.session_state.seq_list) - 1 else "ホームに戻る 🐾"
                     if st.button(btn_skip_text, use_container_width=True):
                         if st.session_state.quiz_mode == "random":
-                            st.session_state.current_q = random.choice(data[current_genre]); st.session_state.show_answer = False; st.rerun()
+                            st.session_state.current_q = random.choice(data[current_genre])
+                            st.session_state.show_answer = False
+                            st.rerun()
                         elif st.session_state.quiz_mode == "sequential":
                             st.session_state.seq_idx += 1
                             if st.session_state.seq_idx < len(st.session_state.seq_list):
                                 nxt = st.session_state.seq_list[st.session_state.seq_idx]
-                                st.session_state.current_genre = nxt["genre"]; st.session_state.current_q = nxt["q"]; st.session_state.show_answer = False; st.rerun()
+                                st.session_state.current_genre = nxt["genre"]
+                                st.session_state.current_q = nxt["q"]
+                                st.session_state.show_answer = False
+                                st.rerun()
                             else:
-                                st.session_state.just_completed = True; st.session_state.mode = "home"; st.rerun()
+                                st.session_state.just_completed = True
+                                st.session_state.mode = "home"
+                                st.rerun()
+
+            # --- AIボタンが押された時の処理（列の外に出して広く表示する） ---
+            if gen_ai:
+                api_key = conf.get("gemini_api_key")
+                if not api_key:
+                    st.warning("⚠️ 個人設定画面から Gemini API キーを設定してください．")
+                else:
+                    with st.spinner("AIが全力で解答を作成中です...（十数秒かかる場合があります）"):
+                        try:
+                            genai.configure(api_key=api_key)
+                            model = genai.GenerativeModel('gemini-3.1-flash-lite')
+                    
+                            ai_prompt = """
+                            この問題画像の解答・解説を作成してください．
+                            【厳格な記述ルール】
+                            ・計算式などはあきらかな場合を除き，できる限り途中式を明示すること．
+                            ・文章は日本語とし，句点・句読点は「．」「，」を使用すること．
+                            ・数式は必ず LaTeX 形式で記述すること．インライン数式は $，独立した数式ブロックは $$ で囲み，記号と数式の間にスペースを空けないこと．
+                            ・段落や数式ブロックの前後には適切に改行を入れること．
+                            """
+                            img_path = q.get("question_image", "")
+                            if img_path and os.path.exists(img_path):
+                                from PIL import Image
+                                img_obj = Image.open(img_path)
+                                
+                                response = model.generate_content([ai_prompt, img_obj])
+                        
+                                # 💡 変更箇所：生成されたテキストをこの問題の「解答」として一時的に上書きし、画面をリロードする
+                                st.session_state.ai_generated_answer = response.text
+                                st.session_state.show_answer = True
+                                st.rerun()
+                        
+                            else:
+                                st.warning("⚠️ 問題の画像が見つからないため，AIに読み込ませることができません．")
+                        except Exception as e:
+                            st.error(f"エラーが発生しました．1〜2分待ってから再度お試しください．\n\n詳細: {e}")
         
         else:
             st.markdown("---")
+
             st.markdown("<h3 style='text-align: center;'>【解答・解説】</h3>", unsafe_allow_html=True)
             ans_text = q.get("answer", "")
             if isinstance(ans_text, str): ans_text = ans_text.replace("\\n", "\n")
             
             col_ans1, col_ans2, col_ans3 = st.columns([1, 6, 1])
-            with col_ans2: st.markdown(ans_text)
+            with col_ans2:
+                 if st.session_state.get("ai_generated_answer"):
+                    # AI解答が存在する場合はタブを表示
+                        tab_ai, tab_normal = st.tabs(["🤖 AI生成解答", "📝 通常の解答"])
+                        with tab_ai:
+                            st.markdown("【🤖 AI自動生成解答】\n\n" + st.session_state.ai_generated_answer)
+                        with tab_normal:
+                            st.markdown(ans_text if ans_text else "*（通常の解答は登録されていません）*")
+                 else:
+                    # AI解答がない場合は普通に表示
+                        st.markdown(ans_text if ans_text else "*（解答がありません）*")
             
             st.markdown("---")
             st.markdown("<h3 style='text-align: center;'>💬 AI家庭教師に質問する</h3>", unsafe_allow_html=True)
@@ -1069,7 +1131,7 @@ else:
                             with st.spinner("AI先生が考え中..."):
                                 try:
                                     # エラー対策：最新モデルを指定し、失敗時は予備モデルを使用
-                                    model = genai.GenerativeModel('gemini-pro')
+                                    model = genai.GenerativeModel('gemini-3.1-flash-lite')
                                         
                                     context_prompt = f"あなたは親切な大学の先生です。以下の過去問の解答について生徒から質問が来ました。\n\n【解答解説】\n{ans_text}\n\n【生徒からの質問】\n{user_input}\n\n数式はLaTeX形式で、句読点は「．」「，」を使用し、生徒が理解できるように分かりやすく教えてください。"
                                     
