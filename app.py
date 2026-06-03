@@ -27,19 +27,28 @@ def load_data():
     data = ref.get()
     return data if data else {}
 
+@st.cache_data
+def load_genre_data(genre):
+    """指定された分野（ジャンル）の問題だけをピンポイントでダウンロードする"""
+    # 💡 ポイント：all_questions のさらに下の「分野名」まで直接パスを指定する
+    ref = db.reference(f'app_data/all_questions/{genre}')
+    genre_data = ref.get()
+    
+    return genre_data if genre_data else []
+
 def save_data(data_dict):
     ref = db.reference('app_data/all_questions')
     ref.set(data_dict)
     st.cache_data.clear()
 
 @st.cache_data
-def load_evals():
-    username = st.session_state.get("username", "Guest")
+def load_evals(username):  # 💡 ここに username を追加
+    # （st.session_state... の行は削除して、引数の username を直接使います）
     ref = db.reference(f'users/{username}/evals')
     data = ref.get()
     if not data: return {}
     
-    # Firebase用の安全なキー（全角）を，アプリ用の半角に戻す
+    # Firebase用の安全なキー（全角）を、アプリ用の半角に戻す
     res = {}
     for g, qs in data.items():
         res[g] = {}
@@ -376,8 +385,94 @@ else:
                 st.success("保存しました！")
                 st.rerun()
 
+        current_user = st.session_state.get("username", "Guest")
+        evals_home = load_evals(current_user)
+        total_solved = 0
+        
+        # 評価済みの問題数だけをシンプルにカウント
+        for g, qs in evals_home.items():
+            for k, val in qs.items():
+                r = val.get("rating", "") if isinstance(val, dict) else (val if isinstance(val, str) else "")
+                if r in ["〇", "△", "▲", "×"]:
+                    total_solved += 1
+        
+        # 画面中央に目立つように配置
+        st.markdown(f"""
+        <div style='background-color: rgba(255, 255, 255, 0.05); padding: 20px; border-radius: 10px; text-align: center; max-width: 400px; margin: 0 auto;'>
+            <div style='color: #aaa; font-size: 1.1em;'>🔥 これまでに解き明かした問題数</div>
+            <div style='font-size: 3.5em; font-weight: bold; color: #00cc96; line-height: 1.2;'>{total_solved} <span style='font-size: 0.35em; color: #aaa; font-weight: normal;'>問</span></div>
+        </div>
+        """, unsafe_allow_html=True)
+        st.write("")
+        st.markdown("<hr style='margin: 1em 0px; border: 0.5px solid #444;'/>", unsafe_allow_html=True)
+
         # --- 📊 スコア計算 (4段階評価・部分点対応) ---
-        evals = load_evals()
+
+        def calculate_advanced_expected_scores(data, evals):
+            """
+            試験の特性に合わせた高度な予想得点計算
+            - 数学: 問題番号(1〜4)ごとの25点満点加算方式
+            - 電磁気・電気回路: 頻出タグの重み付け加重平均方式
+            """
+            scores = {"数学": 0.0, "電磁気": 0.0, "電気回路": 0.0}
+    
+            # ユーザー様の設定に合わせた部分点マップ
+            rating_map = {"〇": 1.0, "△": 0.66, "▲": 0.33, "×": 0.0}
+
+            # ==========================================
+            # 📐 数学の計算（問題1〜4の固定配点モデル）
+            # ==========================================
+            if "数学" in evals and "数学" in data:
+                math_total = 0.0
+                for q_num in ["1", "2", "3", "4"]:
+                    num_evals = []
+                    for k, val in evals["数学"].items():
+                        # キーの末尾が "_1" 〜 "_4" かどうかで大問を判定
+                        if str(k).endswith(f"_{q_num}"):
+                            r = val.get("rating", "") if isinstance(val, dict) else (val if isinstance(val, str) else "")
+                            if r in rating_map:
+                                num_evals.append(rating_map[r])
+            
+                    if num_evals:
+                        # その大問の平均正答率 × 25点
+                        math_total += 25.0 * (sum(num_evals) / len(num_evals))
+                scores["数学"] = round(math_total, 1)
+
+            # ==========================================
+            # ⚡ 電磁気・電気回路の計算（タグ重み付けモデル）
+            # ==========================================
+            for genre in ["電磁気", "電気回路"]:
+                if genre in evals and genre in data:
+                    # 1. 全過去問からタグの出現頻度をカウント
+                    tag_counts = {}
+                    for q in data[genre]:
+                        for t in q.get("tags", []):
+                            tag_counts[t] = tag_counts.get(t, 0) + 1
+
+                    total_weight = 0
+                    weighted_score_sum = 0
+            
+                    for q_key, val in evals[genre].items():
+                        r = val.get("rating", "") if isinstance(val, dict) else (val if isinstance(val, str) else "")
+                        if r not in rating_map: continue
+                
+                        ratio = rating_map[r]
+                        tags = val.get("tags", []) if isinstance(val, dict) else []
+                
+                        # その問題の重要度 = 含まれるタグの出現回数の合計
+                        q_weight = sum(tag_counts.get(t, 0) for t in tags)
+                        if q_weight == 0: q_weight = 1
+                
+                        weighted_score_sum += q_weight * ratio
+                        total_weight += q_weight
+            
+                    if total_weight > 0:
+                        scores[genre] = round(100.0 * (weighted_score_sum / total_weight), 1)
+
+            return scores
+
+        current_user = st.session_state.get("username", "Guest")
+        evals = load_evals(current_user)
         total_ans = 0
         total_score = 0.0
         
@@ -411,42 +506,38 @@ else:
                         tag_stats[g][t]["score"] += pts
 
         # --- 🎯 合格ボーダー分析 (円グラフ) ---
-        final_genre_scores = {}
-        for g in GENRE_ORDER:
-            ans = genre_stats[g]["ans"]
-            score = genre_stats[g]["score"]
-            final_genre_scores[g] = (score / ans * 100) if ans > 0 else 0.0
+        final_genre_scores = calculate_advanced_expected_scores(data, evals)
 
         if conf.get("toeic_score", 0)>=800:
-            english_score = 100.0
+              english_score = 100.0
         else:
-            english_score = (conf.get("toeic_score", 0) / 800.0) * 100.0
+              english_score = (conf.get("toeic_score", 0) / 800.0) * 100.0
         total_400_score = final_genre_scores.get("電気回路", 0) + final_genre_scores.get("電磁気", 0) + final_genre_scores.get("数学", 0) + english_score
 
         st.markdown("<h3 style='text-align: center; margin-top: 20px;'>🎯 合格ボーダー分析 (400点満点)</h3>", unsafe_allow_html=True)
         
         fig = go.Figure(go.Indicator(
-            mode = "gauge+number",
-            value = total_400_score,
-            number = {'suffix': " 点", 'valueformat': ".1f"},
-            domain = {'x': [0, 1], 'y': [0, 1]},
-            title = {'text': "<b>現在の推定スコア</b><br><span style='color: gray; font-size:0.8em'>ボーダー: 240点 (得点率6割)</span>"},
-            gauge = {
-                'axis': {'range': [None, 400], 'tickwidth': 1, 'tickcolor': "white"},
-                'bar': {'color': "#ff4b4b" if total_400_score < 240 else "#00cc96"},
-                'bgcolor': "rgba(0,0,0,0)",
-                'borderwidth': 2,
-                'bordercolor': "gray",
-                'steps': [
-                    {'range': [0, 240], 'color': "rgba(255, 75, 75, 0.2)"},
-                    {'range': [240, 400], 'color': "rgba(0, 204, 150, 0.2)"}],
-                'threshold': {
-                    'line': {'color': "red", 'width': 4},
-                    'thickness': 0.75,
-                    'value': 240}
-            }
-        ))
-        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", height=350)
+              mode = "gauge+number",
+              value = total_400_score,
+              number = {'suffix': " 点", 'valueformat': ".1f"},
+              domain = {'x': [0, 1], 'y': [0, 1]},
+              title = {'text': "<b>現在の推定スコア</b><br><span style='color: gray; font-size:0.8em'>ボーダー: 240点 (得点率6割)</span>"},
+              gauge = {
+                  'axis': {'range': [None, 400], 'tickwidth': 1, 'tickcolor': "white"},
+                  'bar': {'color': "#ff4b4b" if total_400_score < 240 else "#00cc96"},
+                  'bgcolor': "rgba(0,0,0,0)",
+                  'borderwidth': 2,
+                  'bordercolor': "gray",
+                  'steps': [
+                      {'range': [0, 240], 'color': "rgba(255, 75, 75, 0.2)"},
+                      {'range': [240, 400], 'color': "rgba(0, 204, 150, 0.2)"}],
+                  'threshold': {
+                      'line': {'color': "red", 'width': 4},
+                      'thickness': 0.75,
+                      'value': 240}
+              }
+          ))
+        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", height=350, margin=dict(t=50, b=20))
         st.plotly_chart(fig, use_container_width=True)
 
         col1, col2, col3, col4 = st.columns(4)
@@ -454,6 +545,15 @@ else:
         col2.metric("🧲 電磁気", f"{final_genre_scores.get('電磁気', 0):.1f} / 100")
         col3.metric("📐 数学", f"{final_genre_scores.get('数学', 0):.1f} / 100")
         col4.metric("🔤 英語 (TOEIC)", f"{english_score:.1f} / 100")
+
+          # 💡 追加点：計算方法の解説をグラフの下に小さく表示
+        st.markdown("""
+          <div style='background-color: rgba(255, 255, 255, 0.05); padding: 10px; border-radius: 5px; font-size: 0.8em; color: #aaa; margin-bottom: 20px;'>
+              <b>📝 予想スコアの算出ロジック</b><br>
+              ・<b>数学</b>：問題番号(1〜4)ごとに独立して平均正答率を算出し，それぞれ25点満点で加算しています．<br>
+              ・<b>専門科目(電気回路・電磁気)</b>：過去問全体での「タグ(出題分野)の出現頻度」を重みとして計算しています．毎年出題される重要分野を間違えるとスコアが大きく下がり，稀な問題を間違えても影響が少ない実践的なモデルです．
+          </div>
+        """, unsafe_allow_html=True)
 
         # --- 📊 過去問道場風 詳細レポート (部分点対応) ---
         st.markdown("<h3 style='text-align: center; margin-top: 30px;'>📊 詳細成績レポート</h3>", unsafe_allow_html=True)
@@ -490,22 +590,42 @@ else:
                 st.write("")
 
         with col_t:
-            st.markdown("#### 🏷️ 大分類別 (タグ)")
-            for g in GENRE_ORDER:
-                sorted_tags = sorted(tag_stats[g].items(), key=lambda x: (x[1]["score"]/x[1]["ans"] if x[1]["ans"]>0 else 0), reverse=True)
-                for t, stats in sorted_tags:
-                    ans = stats["ans"]
-                    score = stats["score"]
-                    acc = (score / ans * 100) if ans > 0 else 0.0
-                    
-                    st.markdown(f"""
-                    <div style="display: flex; justify-content: space-between; margin-bottom: -10px;">
-                        <div><b>{t}</b> <span style="color:#888; font-size:0.8em;">({g}) 解答 {ans}問</span></div>
-                        <div><b>{acc:.1f}%</b></div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    st.progress(int(acc))
-                    st.write("")
+          st.markdown("#### 🚨 苦手分野 ワースト5 (要復習)")
+      
+          # 1. 全ジャンルのタグデータを一つのリストにまとめる
+          all_tags_list = []
+          for g in GENRE_ORDER:
+              for t, stats in tag_stats[g].items():
+                  ans = stats["ans"]
+                  if ans > 0:  # 1問以上解いたタグのみ対象
+                      score = stats["score"]
+                      acc = (score / ans * 100)
+                      all_tags_list.append({
+                          "tag": t,
+                          "genre": g,
+                          "ans": ans,
+                          "acc": acc
+                      })
+      
+          # 2. 正答率が「低い順（昇順）」に並び替える
+          all_tags_list.sort(key=lambda x: x["acc"])
+      
+          # 3. トップ5（ワースト5）を抽出
+          worst_5 = all_tags_list[:5]
+      
+          if worst_5:
+              rank_icons = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+              for i, item in enumerate(worst_5):
+                  st.markdown(f"""
+                  <div style="display: flex; justify-content: space-between; margin-bottom: -10px;">
+                      <div>{rank_icons[i]} <b>{item['tag']}</b> <span style="color:#888; font-size:0.8em;">({item['genre']}) 解答 {item['ans']}問</span></div>
+                      <div style="color: #ff4b4b;"><b>{item['acc']:.1f}%</b></div>
+                  </div>
+                  """, unsafe_allow_html=True)
+                  st.progress(int(item['acc']))
+                  st.write("")
+          else:
+              st.info("まだ評価済みのデータがありません．")
 
     # --------------------------------------
     # モード：AI問題追加
@@ -646,7 +766,7 @@ else:
             
             # 全タグの取得
             all_tags_for_edit = set()
-            evals_for_edit = load_evals()
+            evals_for_edit = load_evals(current_user)
             for g, qs in data.items():
                 for q in qs:
                     q_k = f"{q.get('year', '')}_{q.get('number', '')}"
@@ -738,9 +858,11 @@ else:
         with col_s1:
             # 1. 分野の選択
             target_genre = st.selectbox("📁 集中する分野", GENRE_ORDER)
+
+            genre_data = load_genre_data(target_genre)
             
             # 選択された分野の問題リストを取得し、年度・問題番号順にソート
-            q_list = sorted(data.get(target_genre, []), key=lambda x: (x.get('year', ''), x.get('number', '')))
+            q_list = sorted(genre_data, key=lambda x: (x.get('year', ''), x.get('number', '')))
             q_options = [f"{q.get('year', '')} {q.get('number', '')}" for q in q_list]
             
             # 2. 開始問題の選択
@@ -826,7 +948,8 @@ else:
     # --------------------------------------
     elif st.session_state.mode == "tag_search":
         st.markdown("<h1 style='text-align: center;'>🔍 タグ検索 ＆ 分析</h1>", unsafe_allow_html=True)
-        evals = load_evals()
+        current_user = st.session_state.get("username", "Guest")
+        evals = load_evals(current_user)
         
         # --- 追加機能：タグの統計情報を集計 ---
         tag_stats = {}
@@ -939,7 +1062,8 @@ else:
         with col_reset:
             with st.expander("🚨 データのリセット", expanded=False):
                 if st.button("📄 評価 (〇▲×) のみリセット", use_container_width=True):
-                    evals = load_evals()
+                    current_user = st.session_state.get("username", "Guest")
+                    evals = load_evals(current_user)
                     for g in evals:
                         for k in evals[g]:
                             if isinstance(evals[g][k], dict):
@@ -950,7 +1074,8 @@ else:
                     st.success("評価のみをリセットしました．")
                     st.rerun()
                 
-        evals = load_evals()
+        current_user = st.session_state.get("username", "Guest")
+        evals = load_evals(current_user)
         
         # すべての年度を抽出して降順にソート
         all_years = set()
@@ -1297,7 +1422,8 @@ else:
                             st.error("詳細を入力してください．")
 
             st.markdown("<h3 style='text-align: center;'>自己評価 ＆ タグ付け</h3>", unsafe_allow_html=True)
-            evals = load_evals()
+            current_user = st.session_state.get("username", "Guest")
+            evals = load_evals(current_user)
             rating_data = evals.get(current_genre, {}).get(q_key)
             if rating_data is None: rating, current_tags = "", q.get("tags", [])
             elif isinstance(rating_data, str): rating, current_tags = rating_data, q.get("tags", [])
