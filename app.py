@@ -1092,20 +1092,54 @@ else:
 
             st.markdown("<h3 style='text-align: center;'>【解答・解説】</h3>", unsafe_allow_html=True)
             ans_text = q.get("answer", "")
-            if isinstance(ans_text, str): ans_text = ans_text.replace("\\n", "\n")
-            
+            if isinstance(ans_text, str): ans_text = ans_text.replace("\n", "\n")
+
             col_ans1, col_ans2, col_ans3 = st.columns([1, 6, 1])
             with col_ans2:
-                 if st.session_state.get("ai_generated_answer"):
-                    # AI解答が存在する場合はタブを表示
-                        tab_ai, tab_normal = st.tabs(["🤖 AI生成解答", "📝 通常の解答"])
-                        with tab_ai:
-                            st.markdown("【🤖 AI自動生成解答】\n\n" + st.session_state.ai_generated_answer)
-                        with tab_normal:
-                            st.markdown(ans_text if ans_text else "*（通常の解答は登録されていません）*")
-                 else:
-                    # AI解答がない場合は普通に表示
-                        st.markdown(ans_text if ans_text else "*（解答がありません）*")
+                # --- ここから書き換え：常にタブを表示して、どちらからでも行き来できるようにする ---
+                tab_normal, tab_ai = st.tabs(["📝 通常の解答", "🤖 AI生成解答"])
+        
+                with tab_normal:
+                    st.markdown(ans_text if ans_text else "*（解答がありません）*")
+            
+                with tab_ai:
+                    if st.session_state.get("ai_generated_answer"):
+                        # 既にAI解答がある場合は表示
+                        st.markdown("【🤖 AI自動生成解答】\n\n" + st.session_state.ai_generated_answer)
+                    else:
+                        # まだAI解答がない場合は、タブの中に生成ボタンを置く
+                        st.info("💡 AIによる解説はまだ生成されていません．")
+                        if st.button("✨ 今すぐこの問題の解説をAIに作ってもらう", key=f"gen_ai_tab_{q_key}"):
+                            api_key = conf.get("gemini_api_key")
+                            if not api_key:
+                                st.warning("⚠️ 個人設定画面から Gemini API キーを設定してください．")
+                            else:
+                                with st.spinner("AIが全力で解答を作成中です...（十数秒かかる場合があります）"):
+                                    try:
+                                        genai.configure(api_key=api_key)
+                                        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+                                
+                                        ai_prompt = """
+                                        この問題画像の解答・解説を作成してください．
+                                        【厳格な記述ルール】
+                                        ・計算式などはあきらかな場合を除き，できる限り途中式を明示すること．
+                                        ・文章は日本語とし，句点・句読点は「．」「，」を使用すること．
+                                        ・数式は必ず LaTeX 形式で記述すること．インライン数式は $，独立した数式ブロックは $$ で囲み，記号と数式の間にスペースを空けないこと．
+                                        ・段落や数式ブロックの前後には適切に改行を入れること．
+                                        """
+                                        img_path = q.get("question_image", "")
+                                        if img_path and os.path.exists(img_path):
+                                            from PIL import Image
+                                            img_obj = Image.open(img_path)
+                                            
+                                            response = model.generate_content([ai_prompt, img_obj])
+                                            
+                                            st.session_state.ai_generated_answer = response.text
+                                            st.rerun() # 画面を更新してタブ内にAI解答を表示
+                                        else:
+                                            st.warning("⚠️ 問題の画像が見つからないため，AIに読み込ませることができません．")
+                                    except Exception as e:
+                                        st.error(f"エラーが発生しました．1〜2分待ってから再度お試しください．\n\n詳細: {e}")
             
             st.markdown("---")
             st.markdown("<h3 style='text-align: center;'>💬 AI家庭教師に質問する</h3>", unsafe_allow_html=True)
