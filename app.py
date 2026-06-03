@@ -395,7 +395,10 @@ else:
             score = genre_stats[g]["score"]
             final_genre_scores[g] = (score / ans * 100) if ans > 0 else 0.0
 
-        english_score = (conf.get("toeic_score", 0) / 800.0) * 100.0
+        if conf.get("toeic_score", 0)>=800:
+            english_score = 100.0
+        else:
+            english_score = (conf.get("toeic_score", 0) / 800.0) * 100.0
         total_400_score = final_genre_scores.get("電気回路", 0) + final_genre_scores.get("電磁気", 0) + final_genre_scores.get("数学", 0) + english_score
 
         st.markdown("<h3 style='text-align: center; margin-top: 20px;'>🎯 合格ボーダー分析 (400点満点)</h3>", unsafe_allow_html=True)
