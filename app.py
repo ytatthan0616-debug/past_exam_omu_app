@@ -319,7 +319,7 @@ else:
             if conf.get("show_balloons", True): st.balloons()
             st.session_state.just_completed = False
 
-        st.markdown("<h1 style='text-align: center;'>🐾 学習ホーム</h1>", unsafe_allow_html=True)
+        st.markdown("<h1 style='text-align: center;'>🏠 学習ホーム</h1>", unsafe_allow_html=True)
         
         current_user = st.session_state.get("username", "Guest")
         st.markdown(f"<p style='text-align: center; font-size: 1.2em;'>ようこそ、<b>{current_user}</b> さん！今日も学習を頑張りましょう🐾</p>", unsafe_allow_html=True)
@@ -334,7 +334,7 @@ else:
         st.markdown(f"""
         <div style="background-color: rgba(255, 182, 193, 0.15); padding: 20px; border-radius: 15px; text-align: center; margin-bottom: 20px; border: 2px dashed #FF9EAA;">
             <h2 style="margin: 0;">{exam_name} まで</h2>
-            <h1 style="margin: 0; font-size: 3em; color: #FF4B4B;">あと {days_left} 日</h1>
+            <h1 style="margin: 0; font-size: 3em; color: #ff4b4b;">あと {days_left} 日</h1>
         </div>
         """, unsafe_allow_html=True)
         
@@ -353,83 +353,129 @@ else:
                 save_config(conf)
                 st.success("保存しました！")
                 st.rerun()
-# --- ここから差し替え：過去問道場風ダッシュボード ---
-        st.markdown("<h2 style='text-align: center; margin-top: 30px;'>📊 成績レポート</h2>", unsafe_allow_html=True)
 
+        # --- 📊 スコア計算 (4段階評価・部分点対応) ---
         evals = load_evals()
-        
         total_ans = 0
-        total_cor = 0
+        total_score = 0.0
         
-        # 分野ごとの集計箱
-        genre_stats = {g: {"ans": 0, "cor": 0} for g in GENRE_ORDER}
-        # 大分類（タグ）ごとの集計箱
+        genre_stats = {g: {"ans": 0, "score": 0.0} for g in GENRE_ORDER}
         tag_stats = {g: {} for g in GENRE_ORDER}
 
         for g, qs in evals.items():
-            if g not in genre_stats:
-                continue
+            if g not in genre_stats: continue
             for k, val in qs.items():
                 rating = val.get("rating", "") if isinstance(val, dict) else (val if isinstance(val, str) else "")
                 tags = val.get("tags", []) if isinstance(val, dict) else []
 
-               # 評価済み（〇, △, ▲, ×）のものだけを母数としてカウント
+                # 4段階評価（〇, △, ▲, ×）のものだけカウント
                 if rating in ["〇", "△", "▲", "×"]:
                     total_ans += 1
                     genre_stats[g]["ans"] += 1
                     
-                    # 4段階評価の部分点（〇: 1.0点, △: 0.66点, ▲: 0.33点, ×: 0.0点）
+                    # 記述式試験の部分点（〇: 1.0, △: 0.66, ▲: 0.33, ×: 0.0）
                     if rating == "〇": pts = 1.0
                     elif rating == "△": pts = 0.66
                     elif rating == "▲": pts = 0.33
                     else: pts = 0.0
+                        
+                    total_score += pts
+                    genre_stats[g]["score"] += pts
 
-        # --- 1. 全体の成績 ---
-        st.markdown("#### 🎯 全体")
-        col1, col2, col3 = st.columns(3)
-        overall_acc = (total_cor / total_ans * 100) if total_ans > 0 else 0.0
+                    for t in tags:
+                        if t not in tag_stats[g]:
+                            tag_stats[g][t] = {"ans": 0, "score": 0.0}
+                        tag_stats[g][t]["ans"] += 1
+                        tag_stats[g][t]["score"] += pts
+
+        # --- 🎯 合格ボーダー分析 (円グラフ) ---
+        final_genre_scores = {}
+        for g in GENRE_ORDER:
+            ans = genre_stats[g]["ans"]
+            score = genre_stats[g]["score"]
+            final_genre_scores[g] = (score / ans * 100) if ans > 0 else 0.0
+
+        english_score = (conf.get("toeic_score", 0) / 800.0) * 100.0
+        total_400_score = final_genre_scores.get("電気回路", 0) + final_genre_scores.get("電磁気", 0) + final_genre_scores.get("数学", 0) + english_score
+
+        st.markdown("<h3 style='text-align: center; margin-top: 20px;'>🎯 合格ボーダー分析 (400点満点)</h3>", unsafe_allow_html=True)
         
-        with col1:
-            st.markdown(f"<div style='text-align: center; color: #888;'>出題数 (評価済)</div><h2 style='text-align: center;'>{total_ans} <span style='font-size: 0.5em;'>問</span></h2>", unsafe_allow_html=True)
-        with col2:
-            st.markdown(f"<div style='text-align: center; color: #888;'>正解数 (〇)</div><h2 style='text-align: center;'>{total_cor} <span style='font-size: 0.5em;'>問</span></h2>", unsafe_allow_html=True)
-        with col3:
-            st.markdown(f"<div style='text-align: center; color: #888;'>正答率</div><h2 style='text-align: center;'>{overall_acc:.1f} <span style='font-size: 0.5em;'>%</span></h2>", unsafe_allow_html=True)
+        fig = go.Figure(go.Indicator(
+            mode = "gauge+number",
+            value = total_400_score,
+            number = {'suffix': " 点", 'valueformat': ".1f"},
+            domain = {'x': [0, 1], 'y': [0, 1]},
+            title = {'text': "<b>現在の推定スコア</b><br><span style='color: gray; font-size:0.8em'>ボーダー: 240点 (得点率6割)</span>"},
+            gauge = {
+                'axis': {'range': [None, 400], 'tickwidth': 1, 'tickcolor': "white"},
+                'bar': {'color': "#ff4b4b" if total_400_score < 240 else "#00cc96"},
+                'bgcolor': "rgba(0,0,0,0)",
+                'borderwidth': 2,
+                'bordercolor': "gray",
+                'steps': [
+                    {'range': [0, 240], 'color': "rgba(255, 75, 75, 0.2)"},
+                    {'range': [240, 400], 'color': "rgba(0, 204, 150, 0.2)"}],
+                'threshold': {
+                    'line': {'color': "red", 'width': 4},
+                    'thickness': 0.75,
+                    'value': 240}
+            }
+        ))
+        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", height=350)
+        st.plotly_chart(fig, use_container_width=True)
+
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("⚡ 電気回路", f"{final_genre_scores.get('電気回路', 0):.1f} / 100")
+        col2.metric("🧲 電磁気", f"{final_genre_scores.get('電磁気', 0):.1f} / 100")
+        col3.metric("📐 数学", f"{final_genre_scores.get('数学', 0):.1f} / 100")
+        col4.metric("🔤 英語 (TOEIC)", f"{english_score:.1f} / 100")
+
+        # --- 📊 過去問道場風 詳細レポート (部分点対応) ---
+        st.markdown("<h3 style='text-align: center; margin-top: 30px;'>📊 詳細成績レポート</h3>", unsafe_allow_html=True)
+
+        st.markdown("#### 🎯 全体")
+        c1, c2, c3 = st.columns(3)
+        overall_acc = (total_score / total_ans * 100) if total_ans > 0 else 0.0
+        
+        with c1:
+            st.markdown(f"<div style='text-align: center; color: #888;'>解答済みの問題数</div><h2 style='text-align: center;'>{total_ans} <span style='font-size: 0.5em;'>問</span></h2>", unsafe_allow_html=True)
+        with c2:
+            st.markdown(f"<div style='text-align: center; color: #888;'>獲得スコア (換算)</div><h2 style='text-align: center;'>{total_score:.2f} <span style='font-size: 0.5em;'>点</span></h2>", unsafe_allow_html=True)
+        with c3:
+            st.markdown(f"<div style='text-align: center; color: #888;'>総合得点率</div><h2 style='text-align: center;'>{overall_acc:.1f} <span style='font-size: 0.5em;'>%</span></h2>", unsafe_allow_html=True)
         
         st.progress(int(overall_acc))
         st.markdown("<hr style='margin: 1.5em 0px; border: 0.5px solid #444;'/>", unsafe_allow_html=True)
 
-        # --- 2. 分野別 ＆ 3. 大分類（タグ）別の成績 ---
         col_g, col_t = st.columns([1, 1])
-        
         with col_g:
             st.markdown("#### 📁 分野別")
             for g in GENRE_ORDER:
                 ans = genre_stats[g]["ans"]
-                cor = genre_stats[g]["cor"]
-                acc = (cor / ans * 100) if ans > 0 else 0.0
+                score = genre_stats[g]["score"]
+                acc = (score / ans * 100) if ans > 0 else 0.0
                 
                 st.markdown(f"""
                 <div style="display: flex; justify-content: space-between; margin-bottom: -10px;">
-                    <div><b>{g}</b> <span style="color:#888; font-size:0.8em;">正解 {cor} / {ans}</span></div>
+                    <div><b>{g}</b> <span style="color:#888; font-size:0.8em;">解答 {ans}問</span></div>
                     <div><b>{acc:.1f}%</b></div>
                 </div>
                 """, unsafe_allow_html=True)
                 st.progress(int(acc))
-                st.write("") # 少し隙間を空ける
+                st.write("")
 
         with col_t:
             st.markdown("#### 🏷️ 大分類別 (タグ)")
-            # すべてのタグデータを平坦化して、正答率順などで並べることも可能
             for g in GENRE_ORDER:
-                for t, stats in tag_stats[g].items():
+                sorted_tags = sorted(tag_stats[g].items(), key=lambda x: (x[1]["score"]/x[1]["ans"] if x[1]["ans"]>0 else 0), reverse=True)
+                for t, stats in sorted_tags:
                     ans = stats["ans"]
-                    cor = stats["cor"]
-                    acc = (cor / ans * 100) if ans > 0 else 0.0
+                    score = stats["score"]
+                    acc = (score / ans * 100) if ans > 0 else 0.0
                     
                     st.markdown(f"""
                     <div style="display: flex; justify-content: space-between; margin-bottom: -10px;">
-                        <div><b>{t}</b> <span style="color:#888; font-size:0.8em;">({g}) 正解 {cor} / {ans}</span></div>
+                        <div><b>{t}</b> <span style="color:#888; font-size:0.8em;">({g}) 解答 {ans}問</span></div>
                         <div><b>{acc:.1f}%</b></div>
                     </div>
                     """, unsafe_allow_html=True)
