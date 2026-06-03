@@ -618,72 +618,80 @@ else:
         st.markdown("### 🏷️ タグの整理・統合")
         st.write("似たようなタグを一つにまとめたり，名前を変更したりできます．")
         
-        # 全タグの取得
-        all_tags_for_edit = set()
-        evals_for_edit = load_evals()
-        for g, qs in data.items():
-            for q in qs:
-                q_k = f"{q.get('year', '')}_{q.get('number', '')}"
-                r_data = evals_for_edit.get(g, {}).get(q_k)
-                if isinstance(r_data, dict):
-                    all_tags_for_edit.update(r_data.get("tags", []))
+        # --- 🔒 ここから管理者（用皆樹さん）専用のロック ---
+        if st.session_state.get("username") == "用皆樹":
+            st.markdown("## 🏷️ タグの管理・クラウド移行（管理者専用）")
+            
+            # 全タグの取得
+            all_tags_for_edit = set()
+            evals_for_edit = load_evals()
+            for g, qs in data.items():
+                for q in qs:
+                    q_k = f"{q.get('year', '')}_{q.get('number', '')}"
+                    r_data = evals_for_edit.get(g, {}).get(q_k)
+                    if isinstance(r_data, dict):
+                        all_tags_for_edit.update(r_data.get("tags", []))
+                    else:
+                        all_tags_for_edit.update(q.get("tags", []))
+
+            if all_tags_for_edit:
+                st.write("▼ 現在の全タグ（右上のコピーボタンを押して、私に送ってください！）")
+                st.code(", ".join(sorted(list(all_tags_for_edit))))
+            
+            if all_tags_for_edit:
+                all_tags_list = sorted(list(all_tags_for_edit))
+                
+                old_tags = st.multiselect("まとめたい古いタグを選んでください（複数選択可）", all_tags_list)
+                new_tag = st.text_input("新しいタグ名（統合先）", placeholder="例：微分方程式")
+                
+                if st.button("選択したタグをまとめて書き換える", type="primary"):
+                    if old_tags and new_tag.strip() != "":
+                        # questions.json の書き換え
+                        for g in data:
+                            for q in data[g]:
+                                if any(t in q.get("tags", []) for t in old_tags):
+                                    q["tags"] = [new_tag if t in old_tags else t for t in q["tags"]]
+                                    q["tags"] = list(dict.fromkeys(q["tags"]))
+                        save_data(data)
+                        
+                        # evaluations.json の書き換え
+                        for g in evals_for_edit:
+                            for k in evals_for_edit[g]:
+                                if isinstance(evals_for_edit[g][k], dict) and any(t in evals_for_edit[g][k].get("tags", []) for t in old_tags):
+                                    evals_for_edit[g][k]["tags"] = [new_tag if t in old_tags else t for t in evals_for_edit[g][k]["tags"]]
+                                    evals_for_edit[g][k]["tags"] = list(dict.fromkeys(evals_for_edit[g][k]["tags"]))
+                        save_evals(evals_for_edit)
+                        
+                        st.success(f"選択したタグを「{new_tag}」にまとめて統合しました！")
+                        st.rerun()
+                    elif not old_tags:
+                        st.warning("まとめたい古いタグを選択してください．")
+                    elif new_tag.strip() == "":
+                        st.warning("新しいタグ名を入力してください．")
+
+            # クラウド移行用の一時ボタン
+            st.markdown("<hr style='margin: 1em 0px; border: 0.5px solid #444;'/>", unsafe_allow_html=True)
+            st.markdown("### ☁️ クラウドへのデータ移行")
+            st.write("手元の questions.json をデータベースにアップロードします．")
+            
+            if st.button("データをクラウドに移行する", type="primary"):
+                import os
+                import json
+                if os.path.exists("questions.json"):
+                    with open("questions.json", "r", encoding="utf-8") as f:
+                        q_data = json.load(f)
+                        db.reference('app_data/all_questions').set(q_data)
+                    st.success("🎉 問題データの移行が完了しました！アプリを更新すると問題が表示されます！")
                 else:
-                    all_tags_for_edit.update(q.get("tags", []))
-
-        if all_tags_for_edit:
-            st.write("▼ 現在の全タグ（右上のコピーボタンを押して、私に送ってください！）")
-            st.code(", ".join(sorted(list(all_tags_for_edit))))
-        
-        if all_tags_for_edit:
-            all_tags_list = sorted(list(all_tags_for_edit))
-            
-            # --- 変更点：複数選択できるようにしました ---
-            old_tags = st.multiselect("まとめたい古いタグを選んでください（複数選択可）", all_tags_list)
-            new_tag = st.text_input("新しいタグ名（統合先）", placeholder="例：微分方程式")
-            
-            if st.button("選択したタグをまとめて書き換える", type="primary"):
-                if old_tags and new_tag.strip() != "":
-                    # questions.json の書き換え
-                    for g in data:
-                        for q in data[g]:
-                            # 選んだ古いタグのどれかが含まれていたら書き換える
-                            if any(t in q.get("tags", []) for t in old_tags):
-                                q["tags"] = [new_tag if t in old_tags else t for t in q["tags"]]
-                                q["tags"] = list(dict.fromkeys(q["tags"])) # 重複を削除して綺麗にする
-                    save_data(data)
+                    st.error("⚠️ questions.json が見つかりませんでした．")
                     
-                    # evaluations.json の書き換え
-                    for g in evals_for_edit:
-                        for k in evals_for_edit[g]:
-                            if isinstance(evals_for_edit[g][k], dict) and any(t in evals_for_edit[g][k].get("tags", []) for t in old_tags):
-                                evals_for_edit[g][k]["tags"] = [new_tag if t in old_tags else t for t in evals_for_edit[g][k]["tags"]]
-                                evals_for_edit[g][k]["tags"] = list(dict.fromkeys(evals_for_edit[g][k]["tags"]))
-                    save_evals(evals_for_edit)
-                    
-                    st.success(f"選択したタグを「{new_tag}」にまとめて統合しました！")
-                    st.rerun()
-                elif not old_tags:
-                    st.warning("まとめたい古いタグを選択してください．")
-                elif new_tag.strip() == "":
-                    st.warning("新しいタグ名を入力してください．")
+        else:
+            # 用皆樹さん以外のユーザーがアクセスした時の表示
+            st.warning("🔒 「タグの整理」および「クラウド移行」は管理者（用皆樹）専用機能のためロックされています．")
+        # --- 🔒 ここまで管理者専用のロック ---
 
-        # --- ここから追加：クラウド移行用の一時ボタン ---
+        # ⚙️ 設定保存ボタンは全員が使えるように if-else の外側に残します
         st.markdown("<hr style='margin: 1em 0px; border: 0.5px solid #444;'/>", unsafe_allow_html=True)
-        st.markdown("### ☁️ クラウドへのデータ移行")
-        st.write("手元の questions.json をデータベースにアップロードします．")
-        
-        if st.button("データをクラウドに移行する", type="primary"):
-            import os
-            import json
-            if os.path.exists("questions.json"):
-                with open("questions.json", "r", encoding="utf-8") as f:
-                    q_data = json.load(f)
-                    db.reference('app_data/all_questions').set(q_data)
-                st.success("🎉 問題データの移行が完了しました！アプリを更新すると問題が表示されます！")
-            else:
-                st.error("⚠️ questions.json が見つかりませんでした．")
-        # --- ここまで追加 ---
-
         st.write("")
         if st.button("設定を保存する", type="primary", use_container_width=True):
             conf["gemini_api_key"] = gemini_key
