@@ -34,12 +34,29 @@ def load_evals():
     username = st.session_state.get("username", "Guest")
     ref = db.reference(f'users/{username}/evals')
     data = ref.get()
-    return data if data else {}
+    if not data: return {}
+    
+    # Firebase用の安全なキー（全角）を，アプリ用の半角に戻す
+    res = {}
+    for g, qs in data.items():
+        res[g] = {}
+        for k, v in qs.items():
+            orig_k = k.replace('．', '.').replace('＃', '#')
+            res[g][orig_k] = v
+    return res
 
 def save_evals(evals):
     username = st.session_state.get("username", "Guest")
     ref = db.reference(f'users/{username}/evals')
-    ref.set(evals)
+    
+    # Firebaseで禁止されている半角記号を全角に変換して保存
+    safe_evals = {}
+    for g, qs in evals.items():
+        safe_evals[g] = {}
+        for k, v in qs.items():
+            safe_k = k.replace('.', '．').replace('#', '＃')
+            safe_evals[g][safe_k] = v
+    ref.set(safe_evals)
 
 def load_config():
     username = st.session_state.get("username", "Guest")
@@ -64,7 +81,6 @@ def save_config(conf):
     ref.set(conf)
 
 def get_global_q_stats():
-    # Firebaseから全ユーザーのデータを取得
     users_data = db.reference('users').get()
     q_stats = {}
     if not users_data: return q_stats
@@ -73,16 +89,18 @@ def get_global_q_stats():
         evals = udata.get('evals', {})
         for g, qs in evals.items():
             for k, val in qs.items():
+                # みんなのデータも全角から半角に戻して集計
+                orig_k = k.replace('．', '.').replace('＃', '#')
                 rating = val.get("rating", "") if isinstance(val, dict) else (val if isinstance(val, str) else "")
-                # 評価があるものだけ集計
-                if rating in ["〇", "▲", "×"]:
-                    if k not in q_stats:
-                        q_stats[k] = {"ans": 0, "score": 0.0}
-                    q_stats[k]["ans"] += 1
+                
+                if rating in ["〇", "△", "▲", "×"]:
+                    if orig_k not in q_stats:
+                        q_stats[orig_k] = {"ans": 0, "score": 0.0}
+                    q_stats[orig_k]["ans"] += 1
                     
-                    # 記述式の部分点ルール（〇: 1.0, ▲: 0.33, ×: 0）をみんなのデータにも適用
-                    if rating == "〇": q_stats[k]["score"] += 1.0
-                    elif rating == "▲": q_stats[k]["score"] += 0.33
+                    if rating == "〇": q_stats[orig_k]["score"] += 1.0
+                    elif rating == "△": q_stats[orig_k]["score"] += 0.66
+                    elif rating == "▲": q_stats[orig_k]["score"] += 0.33
     return q_stats
 
 def get_difficulty_ui(q_key, q_stats):
@@ -355,21 +373,16 @@ else:
                 rating = val.get("rating", "") if isinstance(val, dict) else (val if isinstance(val, str) else "")
                 tags = val.get("tags", []) if isinstance(val, dict) else []
 
-                # 評価済み（〇, ▲, ×）のものだけを母数としてカウント
-                if rating in ["〇", "▲", "×"]:
+               # 評価済み（〇, △, ▲, ×）のものだけを母数としてカウント
+                if rating in ["〇", "△", "▲", "×"]:
                     total_ans += 1
                     genre_stats[g]["ans"] += 1
                     
-                    # 今回は厳密な正答率のため、〇（完璧）のみを正解としてカウント
-                    is_cor = 1 if rating == "〇" else 0
-                    total_cor += is_cor
-                    genre_stats[g]["cor"] += is_cor
-
-                    for t in tags:
-                        if t not in tag_stats[g]:
-                            tag_stats[g][t] = {"ans": 0, "cor": 0}
-                        tag_stats[g][t]["ans"] += 1
-                        tag_stats[g][t]["cor"] += is_cor
+                    # 4段階評価の部分点（〇: 1.0点, △: 0.66点, ▲: 0.33点, ×: 0.0点）
+                    if rating == "〇": pts = 1.0
+                    elif rating == "△": pts = 0.66
+                    elif rating == "▲": pts = 0.33
+                    else: pts = 0.0
 
         # --- 1. 全体の成績 ---
         st.markdown("#### 🎯 全体")
@@ -782,7 +795,7 @@ else:
     # --------------------------------------
     elif st.session_state.mode == "dashboard":
         st.markdown("<h1 style='text-align: center;'>成績リスト (年度別)</h1>", unsafe_allow_html=True)
-        st.info("**【凡例】** 🟢: 完璧 (〇) ｜ 🟡: 復習が必要 (▲) ｜ 🔴: 苦手 (×) ｜ ⚪: 未評価")
+        st.info("**【凡例】** 🟢: 完璧 (〇) ｜ 🟡: だいたい解けた (△) ｜ 🟠: 少し解けた (▲) ｜ 🔴: わからなかった (×) ｜ ⚪: 未評価")
         
         col_title, col_reset = st.columns([6, 4])
         with col_title:
@@ -820,7 +833,8 @@ else:
             
             if not y_qs: continue
             
-            counts = {"〇": 0, "▲": 0, "×": 0, "未": 0}
+            # 変更後（未評価のカウントなどを行っているブロック）
+            counts = {"〇": 0, "△": 0, "▲": 0, "×": 0, "未": 0}
             for g, q in y_qs:
                 q_key = f"{q.get('year', '')}_{q.get('number', '')}"
                 rating_data = evals.get(g, {}).get(q_key)
@@ -829,16 +843,18 @@ else:
                 else: r = rating_data.get("rating", "")
                 
                 if r == "〇": counts["〇"] += 1
+                elif r == "△": counts["△"] += 1
                 elif r == "▲": counts["▲"] += 1
                 elif r == "×": counts["×"] += 1
                 else: counts["未"] += 1
             
             total_y = len(y_qs)
             p_maru = int((counts["〇"] / total_y) * 100) if total_y > 0 else 0
+            p_san_light = int((counts["△"] / total_y) * 100) if total_y > 0 else 0
             p_sankaku = int((counts["▲"] / total_y) * 100) if total_y > 0 else 0
             p_batsu = int((counts["×"] / total_y) * 100) if total_y > 0 else 0
             
-            with st.expander(f"📚 {year} (全{total_y}問) ｜ 達成率: 🟢 {p_maru}%  🟡 {p_sankaku}%  🔴 {p_batsu}%", expanded=True):
+            with st.expander(f"📚 {year} (全{total_y}問) ｜ 達成率: 🟢 {p_maru}%  🟡 {p_san_light}%  🟠 {p_sankaku}%  🔴 {p_batsu}%", expanded=True):
                 
                 st.write("**🔽 この年度の演習を開始する**")
                 btn_cols = st.columns(4)
@@ -900,7 +916,7 @@ else:
                                 elif isinstance(rating_data, str): rating, tags = rating_data, q_match.get("tags", [])
                                 else: rating, tags = rating_data.get("rating", ""), rating_data.get("tags", [])
                                 
-                                rating_icons = {"〇": "🟢", "▲": "🟡", "×": "🔴"}
+                                rating_icons = {"〇": "🟢", "△": "🟡", "▲": "🟠", "×": "🔴"}
                                 btn_label = rating_icons.get(rating, "⚪")
                                 tooltip_text = f"タグ: {', '.join(tags)}" if tags else "タグなし"
                                 
@@ -1024,6 +1040,30 @@ else:
 
             st.markdown("---")
             
+            st.markdown("---")
+            with st.expander("⚠️ 解答に間違いを見つけたら...", expanded=False):
+                st.write("解答や解説に誤りがある場合，ここから管理者に報告できます．")
+                with st.form(key=f"correction_form_{q_key}", clear_on_submit=True):
+                    report_text = st.text_area("どの部分が間違っているか，詳細を教えてください．")
+                    submit_report = st.form_submit_button("修正依頼を送信する 📤")
+                    
+                    if submit_report:
+                        if report_text.strip():
+                            # Firebaseの correction_requests に保存
+                            req_id = datetime.datetime.now().strftime("%Y%m%d%H%M%S") + "_" + st.session_state.get("username", "Guest")
+                            req_data = {
+                                "genre": current_genre,
+                                "year": q.get('year', ''),
+                                "number": q.get('number', ''),
+                                "detail": report_text,
+                                "reported_by": st.session_state.get("username", "Guest"),
+                                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            }
+                            db.reference(f'app_data/correction_requests/{req_id}').set(req_data)
+                            st.success("報告ありがとうございます！管理者に修正依頼を送信しました．")
+                        else:
+                            st.error("詳細を入力してください．")
+
             st.markdown("<h3 style='text-align: center;'>自己評価 ＆ タグ付け</h3>", unsafe_allow_html=True)
             evals = load_evals()
             rating_data = evals.get(current_genre, {}).get(q_key)
@@ -1037,10 +1077,14 @@ else:
                     st.write("🏷️ **登録済みのタグ：**")
                     render_beautiful_tags(current_tags)
                 
-                options = ["〇 (完璧)", "▲ (復習が必要)", "× (全くわからなかった)"]
-                default_radio_idx = 1 if rating == "▲" else (2 if rating == "×" else 0)
+                options = ["〇 (完璧)", "△ (だいたい解けた)", "▲ (少し解けた・要復習)", "× (全くわからなかった)"]
+                if rating == "△": default_radio_idx = 1
+                elif rating == "▲": default_radio_idx = 2
+                elif rating == "×": default_radio_idx = 3
+                else: default_radio_idx = 0
                 selected_rating = st.radio("この問題の理解度は？", options, index=default_radio_idx, horizontal=True)
-                
+
+
                 current_tags_str = ", ".join(current_tags)
                 input_tags_str = st.text_input("🏷️ 新しいタグを追加（カンマ区切りで入力）", value=current_tags_str)
                 
