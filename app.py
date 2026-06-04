@@ -436,17 +436,30 @@ else:
                 scores["数学"] = round(math_total, 1)
 
             # ==========================================
-            # ⚡ 電磁気・電気回路の計算（真・タグ習熟度モデル）
+            # ⚡ 電磁気・電気回路の計算（真・タグ習熟度モデル ＋ フォールバック）
             # ==========================================
             for genre in ["電磁気", "電気回路"]:
                 if genre in evals and genre in data:
-                    # 1. 過去問全体から「どのタグが何回出たか(重要度)」をカウント
                     tag_counts = {}
                     for q in data[genre]:
                         for t in q.get("tags", []):
                             tag_counts[t] = tag_counts.get(t, 0) + 1
 
-                    # 2. ユーザーのタグごとの「獲得スコア」と「解いた問題数」を集計
+                    # 💡 追加：もしその分野にタグが1つも登録されていない場合は、単純な正答率で計算する
+                    if not tag_counts:
+                        genre_total_score = 0.0
+                        genre_ans_count = 0
+                        for q_key, val in evals[genre].items():
+                            r = val.get("rating", "") if isinstance(val, dict) else (val if isinstance(val, str) else "")
+                            if r in rating_map:
+                                genre_total_score += rating_map[r]
+                                genre_ans_count += 1
+                
+                        # 解いた問題の平均点 × その分野の全問題数に対する割合（少し甘めの仮計算）
+                        if genre_ans_count > 0:
+                            scores[genre] = round(100.0 * (genre_total_score / len(data[genre])), 1)
+                        continue
+
                     tag_mastery_sum = {t: 0.0 for t in tag_counts}
                     tag_mastery_cnt = {t: 0 for t in tag_counts}
             
@@ -456,7 +469,6 @@ else:
                         ratio = rating_map[r]
                 
                         tags = val.get("tags", []) if isinstance(val, dict) else []
-                        # 万が一evals側にタグが保存されていなかった時のための安全策（dataから取得）
                         if not tags:
                             for q in data[genre]:
                                 if str(q.get('number', '')) in str(q_key) and str(q.get('year', '')) in str(q_key):
@@ -468,15 +480,13 @@ else:
                                 tag_mastery_sum[t] += ratio
                                 tag_mastery_cnt[t] += 1
             
-                    # 3. 未着手の分野も考慮して、100点満点のスコアを算出
                     total_weight = 0
                     weighted_score_sum = 0
             
                     for t, count in tag_counts.items():
-                        weight = count # 出現回数が多いタグほど配点がデカい
+                        weight = count 
                         total_weight += weight
                 
-                        # 💡 ここが最大の変更点：1問も解いていないタグの習熟度は「0%」として計算する
                         if tag_mastery_cnt[t] > 0:
                             mastery = tag_mastery_sum[t] / tag_mastery_cnt[t]
                         else:
@@ -606,6 +616,48 @@ else:
                 """, unsafe_allow_html=True)
                 st.progress(int(acc))
                 st.write("")
+            # ==========================================
+            # 💡 ここから追加：最近解いた問題の履歴 (3件)
+            # ==========================================
+            st.markdown("<hr style='margin: 1.5em 0px; border: 0.5px dashed #444;'/>", unsafe_allow_html=True)
+            st.markdown("#### 🕒 最近の学習履歴")
+     
+            # 全ての評価データから時系列（保存された順）でリスト化
+            recent_history = []
+            for g_name, qs in evals.items():
+                for k, val in qs.items():
+                    r = val.get("rating", "") if isinstance(val, dict) else (val if isinstance(val, str) else "")
+                    if r in ["〇", "△", "▲", "×"]:
+                       recent_history.append({"genre": g_name, "q_key": k, "rating": r})
+     
+            # 辞書の末尾（新しく追加された順）から3件を取得
+            recent_history = recent_history[-3:]
+            recent_history.reverse() # 最新のものが一番上に来るように反転
+     
+            if recent_history:
+                rating_icons = {"〇": "🟢", "△": "🟡", "▲": "🟠", "×": "🔴"}
+                for item in recent_history:
+                    # q_key ("2024_1" など) から年と問題番号を綺麗に分割
+                    parts = item['q_key'].split('_')
+                    y_str = parts[0] if len(parts) > 0 else ""
+             
+                    # "問題1" と入っていても "1" だけ抽出して "問1" と表示する
+                    num_str = parts[1].replace("問題", "").strip() if len(parts) > 1 else ""
+             
+                    icon = rating_icons.get(item['rating'], "⚪")
+             
+                    # カード風のUIで履歴を描画
+                    st.markdown(f"""
+                    <div style="background-color: rgba(255,255,255,0.03); padding: 10px 15px; border-left: 4px solid #444; border-radius: 4px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <span style="font-size: 0.75em; color: #aaa;">{y_str}年度 ｜ {item['genre']}</span><br>
+                            <span style="font-weight: bold; font-size: 0.95em;">問 {num_str}</span>
+                        </div>
+                        <div style="font-size: 1.3em;">{icon}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.markdown("<div style='color: #666; font-size: 0.9em; text-align: center; padding: 10px;'>まだ履歴がありません</div>", unsafe_allow_html=True)
 
         with col_t:
           st.markdown("#### 🚨 苦手分野 ワースト5 (要復習)")
