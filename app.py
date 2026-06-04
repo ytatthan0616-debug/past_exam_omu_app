@@ -476,9 +476,12 @@ else:
                                     break
                             
                         for t in tags:
-                            if t in tag_mastery_sum:
-                                tag_mastery_sum[t] += ratio
-                                tag_mastery_cnt[t] += 1
+                            # 💡 修正：過去のバグで「タグ1, タグ2」と1つに繋がって保存されたデータを分割して救済！
+                            for sub_t in t.replace("，", ",").split(","):
+                                sub_t = sub_t.strip()
+                                if sub_t in tag_mastery_sum:
+                                    tag_mastery_sum[sub_t] += ratio
+                                    tag_mastery_cnt[sub_t] += 1
             
                     total_weight = 0
                     weighted_score_sum = 0
@@ -636,26 +639,39 @@ else:
      
             if recent_history:
                 rating_icons = {"〇": "🟢", "△": "🟡", "▲": "🟠", "×": "🔴"}
-                for item in recent_history:
+                for i, item in enumerate(recent_history):
                     # q_key ("2024_1" など) から年と問題番号を綺麗に分割
                     parts = item['q_key'].split('_')
                     y_str = parts[0] if len(parts) > 0 else ""
-             
-                    # "問題1" と入っていても "1" だけ抽出して "問1" と表示する
                     num_str = parts[1].replace("問題", "").strip() if len(parts) > 1 else ""
-             
                     icon = rating_icons.get(item['rating'], "⚪")
-             
-                    # カード風のUIで履歴を描画
-                    st.markdown(f"""
-                    <div style="background-color: rgba(255,255,255,0.03); padding: 10px 15px; border-left: 4px solid #444; border-radius: 4px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
-                        <div>
-                            <span style="font-size: 0.75em; color: #aaa;">{y_str}年度 ｜ {item['genre']}</span><br>
-                            <span style="font-weight: bold; font-size: 0.95em;">問 {num_str}</span>
-                        </div>
-                        <div style="font-size: 1.3em;">{icon}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    
+                    # 💡 追加：ジャンプするために、元の問題データを data から探し出す
+                    q_match = next((q for q in data.get(item['genre'], []) if f"{q.get('year', '')}_{q.get('number', '')}" == item['q_key']), None)
+                    
+                    if q_match:
+                        # 💡 追加：カラムを使って、左側に履歴テキスト、右側にボタンを配置
+                        col_hist1, col_hist2 = st.columns([5, 2])
+                        
+                        with col_hist1:
+                            # カード風のUI（ボタンの横に置くため少しコンパクトに調整）
+                            st.markdown(f"""
+                            <div style="background-color: rgba(255,255,255,0.03); padding: 8px 15px; border-left: 4px solid #444; border-radius: 4px; margin-bottom: 5px;">
+                                <span style="font-size: 0.75em; color: #aaa;">{y_str}年度 ｜ {item['genre']}</span><br>
+                                <span style="font-size: 1.2em; margin-right: 5px;">{icon}</span><span style="font-weight: bold; font-size: 0.95em;">問 {num_str}</span>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                        with col_hist2:
+                            st.write("") # ボタンの縦位置をカードの中央に合わせるための微調整
+                            # ジャンプボタン
+                            if st.button("復習する", key=f"hist_jump_{i}_{item['q_key']}", use_container_width=True):
+                                st.session_state.mode = "quiz"
+                                st.session_state.quiz_mode = "random" 
+                                st.session_state.current_genre = item['genre']
+                                st.session_state.current_q = q_match
+                                st.session_state.show_answer = False
+                                st.rerun()
             else:
                 st.markdown("<div style='color: #666; font-size: 0.9em; text-align: center; padding: 10px;'>まだ履歴がありません</div>", unsafe_allow_html=True)
 
@@ -1554,10 +1570,13 @@ else:
                 
                 if st.button(btn_text, type="primary", use_container_width=True):
                     if current_genre not in evals: evals[current_genre] = {}
-                    new_tags = [t.strip() for t in input_tags_str.split("，") if t.strip()]  # カンマも全角半角両方対応しておくと安全です
-                    if not new_tags: # 半角カンマの場合のフォールバック
-                        new_tags = [t.strip() for t in input_tags_str.split(",") if t.strip()]
+                    
+                    # 💡 修正：全角カンマを半角カンマに統一してから、確実に分割する
+                    normalized_tags_str = input_tags_str.replace("，", ",")
+                    new_tags = [t.strip() for t in normalized_tags_str.split(",") if t.strip()]
             
+                    # 1. 保存するデータをまとめる
+                    eval_data = {"rating": selected_rating[0], "tags": new_tags}
                     # 1. 保存するデータをまとめる
                     eval_data = {"rating": selected_rating[0], "tags": new_tags}
         
