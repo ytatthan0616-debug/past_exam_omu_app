@@ -1246,33 +1246,32 @@ else:
         st.markdown(f"<h3 style='text-align: center;'>【出題】{q.get('year', '')} {current_genre} - {q.get('number', '')} <br><div style='margin-top: 8px;'>{diff_ui}</div></h3>", unsafe_allow_html=True)
         
         if os.path.exists(q.get("question_image", "")):
-         # 1. カラム(st.columns)を使わず、シンプルに画像を出力する
-         st.image(q.get("question_image", ""))
+         # 画像を画面幅いっぱい（のコンテナ）で中央寄せするための設定
+         st.image(q.get("question_image", ""), use_container_width=True)
          
          # ====================================================
-         # 💡 画像の下に配置する親切なズームUIとCSS
+         # 💡 スライダーを消し、中央寄せと綺麗なUIだけを残したCSS
          # ====================================================
          st.markdown("<hr style='margin: 2em 0px 1em 0px; border: 1px solid #444;'/>", unsafe_allow_html=True)
-        
-         st.markdown("<div style='color: #aaa; font-size: 0.9em; margin-bottom: 10px;'>🔍 <b>問題表示のカスタマイズ</b> ｜ スライダーを動かして，数式や回路図が見やすいサイズに調整してください．</div>", unsafe_allow_html=True)
-        
-         # スライダーを画面幅いっぱいに広く配置
-         zoom_level = st.slider("🔍 画像のサイズ調整", min_value=200, max_value=1200, value=400, step=50, label_visibility="collapsed")
-        
+         
+         # 案内文をシンプルなものに変更
+         st.markdown("<div style='color: #aaa; font-size: 0.9em; margin-bottom: 10px; text-align: center;'>📷 <b>問題画像</b> ｜ 画像をクリックすると全画面で拡大表示できます．</div>", unsafe_allow_html=True)
+         
          st.markdown("<hr style='margin: 1em 0px 2em 0px; border: 1px dashed #444;'/>", unsafe_allow_html=True)
 
-         # 画像を強制的に中央配置し、スライダーと連動させる強力なCSS
-         st.markdown(f"""
+         # 画像を強制的に中央配置し、サイズを程よく固定する強力なCSS
+         st.markdown("""
          <style>
-         div[data-testid="stImage"] {{
-             display: flex !important;
-             justify-content: center !important;
+         /* 画像を囲む箱を横幅100%にする */
+         div[data-testid="stImage"] {
              width: 100% !important;
+             text-align: center !important;
+         }
+         /* その箱の中で画像を「ブロック要素」として扱い、左右の余白を均等（margin: 0 auto）にして真ん中に固定 */
+         div[data-testid="stImage"] img {
+             display: block !important;
              margin: 0 auto !important;
-         }}
-         div[data-testid="stImage"] img {{
-             margin: 0 auto !important;
-             max-height: {zoom_level}px !important;
+             max-height: 500px !important; /* スライダーの代わりに、スクロールしやすく見やすい固定の最大高さを設定 */
              width: auto !important;
              max-width: 100% !important;
              object-fit: contain !important;
@@ -1280,8 +1279,7 @@ else:
              padding: 15px !important;
              border-radius: 10px !important;
              box-shadow: 0px 4px 15px rgba(0, 0, 0, 0.3) !important;
-             transition: max-height 0.2s ease-in-out !important;
-         }}
+         }
          </style>
          """, unsafe_allow_html=True)
          # ====================================================
