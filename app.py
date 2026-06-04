@@ -412,11 +412,10 @@ else:
             """
             試験の特性に合わせた高度な予想得点計算
             - 数学: 問題番号(1〜4)ごとの25点満点加算方式
-            - 電磁気・電気回路: 頻出タグの重み付け加重平均方式
+            - 電磁気・電気回路: 全タグの出現頻度を母数とした「習熟度」加重平均方式
             """
             scores = {"数学": 0.0, "電磁気": 0.0, "電気回路": 0.0}
     
-            # ユーザー様の設定に合わせた部分点マップ
             rating_map = {"〇": 1.0, "△": 0.66, "▲": 0.33, "×": 0.0}
 
             # ==========================================
@@ -427,45 +426,64 @@ else:
                 for q_num in ["1", "2", "3", "4"]:
                     num_evals = []
                     for k, val in evals["数学"].items():
-                        # キーの末尾が "_1" 〜 "_4" かどうかで大問を判定
-                        if str(k).endswith(f"_{q_num}"):
+                        if str(k).endswith(q_num):
                             r = val.get("rating", "") if isinstance(val, dict) else (val if isinstance(val, str) else "")
                             if r in rating_map:
                                 num_evals.append(rating_map[r])
             
                     if num_evals:
-                        # その大問の平均正答率 × 25点
                         math_total += 25.0 * (sum(num_evals) / len(num_evals))
                 scores["数学"] = round(math_total, 1)
 
             # ==========================================
-            # ⚡ 電磁気・電気回路の計算（タグ重み付けモデル）
+            # ⚡ 電磁気・電気回路の計算（真・タグ習熟度モデル）
             # ==========================================
             for genre in ["電磁気", "電気回路"]:
                 if genre in evals and genre in data:
-                    # 1. 全過去問からタグの出現頻度をカウント
+                    # 1. 過去問全体から「どのタグが何回出たか(重要度)」をカウント
                     tag_counts = {}
                     for q in data[genre]:
                         for t in q.get("tags", []):
                             tag_counts[t] = tag_counts.get(t, 0) + 1
 
-                    total_weight = 0
-                    weighted_score_sum = 0
+                    # 2. ユーザーのタグごとの「獲得スコア」と「解いた問題数」を集計
+                    tag_mastery_sum = {t: 0.0 for t in tag_counts}
+                    tag_mastery_cnt = {t: 0 for t in tag_counts}
             
                     for q_key, val in evals[genre].items():
                         r = val.get("rating", "") if isinstance(val, dict) else (val if isinstance(val, str) else "")
                         if r not in rating_map: continue
-                
                         ratio = rating_map[r]
+                
                         tags = val.get("tags", []) if isinstance(val, dict) else []
-                
-                        # その問題の重要度 = 含まれるタグの出現回数の合計
-                        q_weight = sum(tag_counts.get(t, 0) for t in tags)
-                        if q_weight == 0: q_weight = 1
-                
-                        weighted_score_sum += q_weight * ratio
-                        total_weight += q_weight
+                        # 万が一evals側にタグが保存されていなかった時のための安全策（dataから取得）
+                        if not tags:
+                            for q in data[genre]:
+                                if str(q.get('number', '')) in str(q_key) and str(q.get('year', '')) in str(q_key):
+                                    tags = q.get("tags", [])
+                                    break
+                            
+                        for t in tags:
+                            if t in tag_mastery_sum:
+                                tag_mastery_sum[t] += ratio
+                                tag_mastery_cnt[t] += 1
             
+                    # 3. 未着手の分野も考慮して、100点満点のスコアを算出
+                    total_weight = 0
+                    weighted_score_sum = 0
+            
+                    for t, count in tag_counts.items():
+                        weight = count # 出現回数が多いタグほど配点がデカい
+                        total_weight += weight
+                
+                        # 💡 ここが最大の変更点：1問も解いていないタグの習熟度は「0%」として計算する
+                        if tag_mastery_cnt[t] > 0:
+                            mastery = tag_mastery_sum[t] / tag_mastery_cnt[t]
+                        else:
+                            mastery = 0.0
+                    
+                        weighted_score_sum += weight * mastery
+                
                     if total_weight > 0:
                         scores[genre] = round(100.0 * (weighted_score_sum / total_weight), 1)
 
@@ -565,7 +583,7 @@ else:
         with c1:
             st.markdown(f"<div style='text-align: center; color: #888;'>解答済みの問題数</div><h2 style='text-align: center;'>{total_ans} <span style='font-size: 0.5em;'>問</span></h2>", unsafe_allow_html=True)
         with c2:
-            st.markdown(f"<div style='text-align: center; color: #888;'>獲得スコア (換算)</div><h2 style='text-align: center;'>{total_score:.2f} <span style='font-size: 0.5em;'>点</span></h2>", unsafe_allow_html=True)
+            st.markdown(f"<div style='text-align: center; color: #888;'>予想スコア (400点満点)</div><h2 style='text-align: center;'>{total_400_score:.1f} <span style='font-size: 0.5em;'>点</span></h2>", unsafe_allow_html=True)
         with c3:
             st.markdown(f"<div style='text-align: center; color: #888;'>総合得点率</div><h2 style='text-align: center;'>{overall_acc:.1f} <span style='font-size: 0.5em;'>%</span></h2>", unsafe_allow_html=True)
         
@@ -1332,7 +1350,7 @@ else:
                                 with st.spinner("AIが全力で解答を作成中です...（十数秒かかる場合があります）"):
                                     try:
                                         genai.configure(api_key=api_key)
-                                        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+                                        model = genai.GenerativeModel('gemini-3.1-flash-lite')
                                 
                                         ai_prompt = """
                                         この問題画像の解答・解説を作成してください．
