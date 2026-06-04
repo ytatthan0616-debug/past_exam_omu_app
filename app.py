@@ -1214,6 +1214,32 @@ else:
     # モード：出題 ＆ AIチャット
     # --------------------------------------
     elif st.session_state.mode == "quiz":
+        col_space, col_slider = st.columns([3, 1])
+        with col_slider:
+            # 最小200px 〜 最大1000px の間で調整できるスライダー（初期値は400px）
+            zoom_level = st.slider("🔍 画像のサイズ調整", min_value=200, max_value=1000, value=400, step=50, label_visibility="collapsed")
+            
+        st.markdown(f"""
+        <style>
+        /* 画像を常に中央に配置 */
+        [data-testid="stImage"] {{
+            display: flex;
+            justify-content: center;
+            margin-bottom: 20px;
+        }}
+        /* スライダーの値（zoom_level）を使って縦幅をリアルタイムに制御 */
+        [data-testid="stImage"] img {{
+            max-height: {zoom_level}px !important;
+            width: auto;
+            object-fit: contain;
+            background-color: #ffffff;
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0px 4px 15px rgba(0, 0, 0, 0.3);
+            transition: max-height 0.2s ease-in-out; /* 拡大縮小を滑らかにするアニメーション */
+        }}
+        </style>
+        """, unsafe_allow_html=True)
         if st.session_state.quiz_mode == "sequential":
             st.markdown(f"<h1 style='text-align: center;'>🛤️ コース演習 ({st.session_state.seq_idx + 1} / {len(st.session_state.seq_list)}問目)</h1>", unsafe_allow_html=True)
             current_genre = st.session_state.current_genre
