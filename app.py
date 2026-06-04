@@ -7,6 +7,7 @@ import datetime
 import plotly.graph_objects as go
 import google.generativeai as genai
 from PIL import Image
+import time
 
 # --- ここから追加：Firebaseの準備 ---
 import firebase_admin
@@ -625,36 +626,41 @@ else:
             st.markdown("<hr style='margin: 1.5em 0px; border: 0.5px dashed #444;'/>", unsafe_allow_html=True)
             st.markdown("#### 🕒 最近の学習履歴")
      
-            # 全ての評価データから時系列（保存された順）でリスト化
+            # 全ての評価データからリスト化
             recent_history = []
             for g_name, qs in evals.items():
                 for k, val in qs.items():
-                    r = val.get("rating", "") if isinstance(val, dict) else (val if isinstance(val, str) else "")
+                    if isinstance(val, dict):
+                        r = val.get("rating", "")
+                        ts = val.get("timestamp", 0.0) # 保存した時間を取得（古いデータは0になる）
+                    else:
+                        r = val if isinstance(val, str) else ""
+                        ts = 0.0
+                        
                     if r in ["〇", "△", "▲", "×"]:
-                       recent_history.append({"genre": g_name, "q_key": k, "rating": r})
-     
-            # 辞書の末尾（新しく追加された順）から3件を取得
+                       recent_history.append({"genre": g_name, "q_key": k, "rating": r, "timestamp": ts})
+    
+            # 💡 修正：辞書の順番ではなく、保存した「時間」の順番で正確に並び替える
+            recent_history.sort(key=lambda x: x["timestamp"])
+            
+            # 最新の3件を取得して反転
             recent_history = recent_history[-3:]
-            recent_history.reverse() # 最新のものが一番上に来るように反転
-     
+            recent_history.reverse() 
+            
             if recent_history:
                 rating_icons = {"〇": "🟢", "△": "🟡", "▲": "🟠", "×": "🔴"}
                 for i, item in enumerate(recent_history):
-                    # q_key ("2024_1" など) から年と問題番号を綺麗に分割
                     parts = item['q_key'].split('_')
-                    y_str = parts[0] if len(parts) > 0 else ""
+                    # 💡 修正：年度がダブらないように元の文字から「年度」を削り取っておく
+                    y_str = parts[0].replace("年度", "") if len(parts) > 0 else ""
                     num_str = parts[1].replace("問題", "").strip() if len(parts) > 1 else ""
                     icon = rating_icons.get(item['rating'], "⚪")
                     
-                    # 💡 追加：ジャンプするために、元の問題データを data から探し出す
                     q_match = next((q for q in data.get(item['genre'], []) if f"{q.get('year', '')}_{q.get('number', '')}" == item['q_key']), None)
                     
                     if q_match:
-                        # 💡 追加：カラムを使って、左側に履歴テキスト、右側にボタンを配置
                         col_hist1, col_hist2 = st.columns([5, 2])
-                        
                         with col_hist1:
-                            # カード風のUI（ボタンの横に置くため少しコンパクトに調整）
                             st.markdown(f"""
                             <div style="background-color: rgba(255,255,255,0.03); padding: 8px 15px; border-left: 4px solid #444; border-radius: 4px; margin-bottom: 5px;">
                                 <span style="font-size: 0.75em; color: #aaa;">{y_str}年度 ｜ {item['genre']}</span><br>
@@ -663,8 +669,7 @@ else:
                             """, unsafe_allow_html=True)
                             
                         with col_hist2:
-                            st.write("") # ボタンの縦位置をカードの中央に合わせるための微調整
-                            # ジャンプボタン
+                            st.write("") 
                             if st.button("復習する", key=f"hist_jump_{i}_{item['q_key']}", use_container_width=True):
                                 st.session_state.mode = "quiz"
                                 st.session_state.quiz_mode = "random" 
@@ -1575,10 +1580,13 @@ else:
                     normalized_tags_str = input_tags_str.replace("，", ",")
                     new_tags = [t.strip() for t in normalized_tags_str.split(",") if t.strip()]
             
-                    # 1. 保存するデータをまとめる
-                    eval_data = {"rating": selected_rating[0], "tags": new_tags}
-                    # 1. 保存するデータをまとめる
-                    eval_data = {"rating": selected_rating[0], "tags": new_tags}
+                    # 1. 💡 修正：いつ解いたか（現在時刻）も一緒に保存するように追加！
+                    import time
+                    eval_data = {
+                        "rating": selected_rating[0], 
+                        "tags": new_tags,
+                        "timestamp": time.time()  # 解いた瞬間の時間を記録
+                    }
         
                     # 2. ローカル（手元の画面用）のデータを更新する
                     evals[current_genre][q_key] = eval_data
