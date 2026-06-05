@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import google.generativeai as genai
 from PIL import Image
 import time
+import hashlib
 
 # --- ここから追加：Firebaseの準備 ---
 import firebase_admin
@@ -160,6 +161,112 @@ def get_difficulty_ui(q_key, q_stats):
     return f"<span style='color: {color}; font-size: 0.6em; border: 1px solid {color}; padding: 2px 10px; border-radius: 12px; font-weight: normal;'>📊 難易度: {label} (正答率 {acc*100:.0f}%)</span>"
 
 
+# ==========================================
+# 💡 ランキング ＆ スコア計算用の共通関数
+# ==========================================
+def calculate_advanced_expected_scores(data, evals):
+    """試験の特性に合わせた高度な予想得点計算"""
+    scores = {"数学": 0.0, "電磁気": 0.0, "電気回路": 0.0}
+    rating_map = {"〇": 1.0, "△": 0.66, "▲": 0.33, "×": 0.0}
+
+    # 数学の計算
+    if "数学" in evals and "数学" in data:
+        math_total = 0.0
+        for q_num in ["1", "2", "3", "4"]:
+            num_evals = []
+            for k, val in evals["数学"].items():
+                if str(k).endswith(q_num):
+                    r = val.get("rating", "") if isinstance(val, dict) else (val if isinstance(val, str) else "")
+                    if r in rating_map: num_evals.append(rating_map[r])
+            if num_evals:
+                math_total += 25.0 * (sum(num_evals) / len(num_evals))
+        scores["数学"] = round(math_total, 1)
+
+    # 電磁気・電気回路の計算
+    for genre in ["電磁気", "電気回路"]:
+        if genre in evals and genre in data:
+            tag_counts = {}
+            for q in data[genre]:
+                for t in q.get("tags", []):
+                    tag_counts[t] = tag_counts.get(t, 0) + 1
+
+            if not tag_counts:
+                genre_total_score = 0.0
+                genre_ans_count = 0
+                for q_key, val in evals[genre].items():
+                    r = val.get("rating", "") if isinstance(val, dict) else (val if isinstance(val, str) else "")
+                    if r in rating_map:
+                        genre_total_score += rating_map[r]
+                        genre_ans_count += 1
+                if genre_ans_count > 0:
+                    scores[genre] = round(100.0 * (genre_total_score / len(data[genre])), 1)
+                continue
+
+            tag_mastery_sum = {t: 0.0 for t in tag_counts}
+            tag_mastery_cnt = {t: 0 for t in tag_counts}
+            for q_key, val in evals[genre].items():
+                r = val.get("rating", "") if isinstance(val, dict) else (val if isinstance(val, str) else "")
+                if r not in rating_map: continue
+                ratio = rating_map[r]
+                tags = val.get("tags", []) if isinstance(val, dict) else []
+                if not tags:
+                    for q in data[genre]:
+                        if str(q.get('number', '')) in str(q_key) and str(q.get('year', '')) in str(q_key):
+                            tags = q.get("tags", [])
+                            break
+                for t in tags:
+                    for sub_t in t.replace("，", ",").split(","):
+                        sub_t = sub_t.strip()
+                        if sub_t in tag_mastery_sum:
+                            tag_mastery_sum[sub_t] += ratio
+                            tag_mastery_cnt[sub_t] += 1
+            
+            total_weight = 0
+            weighted_score_sum = 0
+            for t, count in tag_counts.items():
+                weight = count 
+                total_weight += weight
+                mastery = tag_mastery_sum[t] / tag_mastery_cnt[t] if tag_mastery_cnt[t] > 0 else 0.0
+                weighted_score_sum += weight * mastery
+            if total_weight > 0:
+                scores[genre] = round(100.0 * (weighted_score_sum / total_weight), 1)
+    return scores
+
+@st.cache_data(ttl=7200)
+def get_ranking_data(_data):
+    """全員の学習状況を10分間キャッシュして取得する"""
+    users_data = db.reference('users').get()
+    if not users_data: return []
+
+    ranking_list = []
+    for uname, udata in users_data.items():
+        evals = udata.get('evals', {})
+        config = udata.get('config', {})
+        
+        # 1. 解いた問題数をカウント
+        solved_count = 0
+        for g, qs in evals.items():
+            for k, val in qs.items():
+                r = val.get("rating", "") if isinstance(val, dict) else (val if isinstance(val, str) else "")
+                if r in ["〇", "△", "▲", "×"]:
+                    solved_count += 1
+        
+        if solved_count == 0: continue # 0問の人は除外
+        
+        # 2. 予想スコアを計算
+        scores = calculate_advanced_expected_scores(_data, evals)
+        toeic = config.get("toeic_score", 0)
+        english_score = 100.0 if toeic >= 800 else (toeic / 800.0) * 100.0
+        total_400 = scores.get("電気回路", 0) + scores.get("電磁気", 0) + scores.get("数学", 0) + english_score
+        
+        ranking_list.append({
+            "name": uname,
+            "solved": solved_count,
+            "score": total_400
+        })
+    return ranking_list
+
+
 # --- 分野の並び順設定 ---
 GENRE_ORDER = ["電気回路", "電磁気", "数学"]
 
@@ -193,7 +300,7 @@ st.set_page_config(page_title="過去問演習アプリ", layout="wide")
 
 if "username" not in st.session_state:
     st.markdown("<h1 style='text-align: center;'>🚪 過去問演習アプリへようこそ</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center;'>あなたの成績を保存するために、名前を教えてください。</p>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center;'>あなたの成績を保存するために、名前とパスワードを入力してください。</p>", unsafe_allow_html=True)
     
     st.info("""
             **【注意事項】**
@@ -204,14 +311,33 @@ if "username" not in st.session_state:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         with st.form("login_form"):
-            user_name = st.text_input("ニックネーム (他人と被らない名前にしてください．既にニックネームが登録されている場合はそれを入力してください)")
+            user_name = st.text_input("ニックネーム (他人と被らない名前にしてください)")
+            password = st.text_input("パスワード (初めての方はここで設定されます)", type="password")
+            
             submitted = st.form_submit_button("学習をスタート 🐈💨", use_container_width=True)
             if submitted:
-                if user_name.strip() == "":
-                    st.error("名前を入力してください！")
+                if user_name.strip() == "" or password.strip() == "":
+                    st.error("名前とパスワードの両方を入力してください！")
                 else:
-                    st.session_state.username = user_name.strip()
-                    st.rerun()
+                    uname = user_name.strip()
+                    # パスワードをそのまま保存するのは危険なので、暗号化（ハッシュ化）する
+                    hashed_pw = hashlib.sha256(password.encode()).hexdigest()
+                    
+                    user_ref = db.reference(f'users/{uname}/auth')
+                    auth_data = user_ref.get()
+                    
+                    if auth_data is None:
+                        # 新規登録
+                        user_ref.set({"password": hashed_pw})
+                        st.session_state.username = uname
+                        st.rerun()
+                    else:
+                        # 既存ユーザーのログインチェック
+                        if auth_data.get("password") == hashed_pw:
+                            st.session_state.username = uname
+                            st.rerun()
+                        else:
+                            st.error("パスワードが間違っています。")
     st.stop() # ログインするまで下のアプリ画面を表示しない
 
 conf = load_config()
@@ -320,13 +446,17 @@ if st.sidebar.button("📊 成績リスト (年度別)", use_container_width=Tru
     st.session_state.mode = "dashboard"
     st.rerun()
 
-if st.sidebar.button("🔍 タグ検索", use_container_width=True):
+if st.sidebar.button("🔍 タグ検索　＆　問題履歴", use_container_width=True):
     st.session_state.mode = "tag_search"
     st.rerun()
 
 st.sidebar.markdown("<hr style='margin: 1em 0px; border: 0.5px solid #444;'/>", unsafe_allow_html=True)
 if st.sidebar.button("✨ AI問題追加 (自動)", use_container_width=True):
     st.session_state.mode = "ai_add"
+    st.rerun()
+
+if st.sidebar.button("🏆 ランキング", use_container_width=True):
+    st.session_state.mode = "ranking"
     st.rerun()
     
 st.sidebar.markdown("<br>", unsafe_allow_html=True)
@@ -405,15 +535,30 @@ else:
                 if r in ["〇", "△", "▲", "×"]:
                     total_solved += 1
         
-        # 画面中央に目立つように配置
-        st.markdown(f"""
-        <div style='background-color: rgba(255, 255, 255, 0.05); padding: 20px; border-radius: 10px; text-align: center; max-width: 400px; margin: 0 auto;'>
-            <div style='color: #aaa; font-size: 1.1em;'>🔥 これまでに解き明かした問題数</div>
-            <div style='font-size: 3.5em; font-weight: bold; color: #00cc96; line-height: 1.2;'>{total_solved} <span style='font-size: 0.35em; color: #aaa; font-weight: normal;'>問</span></div>
-        </div>
-        """, unsafe_allow_html=True)
-        st.write("")
-        st.markdown("<hr style='margin: 1em 0px; border: 0.5px solid #444;'/>", unsafe_allow_html=True)
+        # 画面中央に目立つように配置 ＋ 右側にランキングTOP3
+        col_main, col_rank = st.columns([5, 3])
+        
+        with col_main:
+            st.markdown(f"""
+            <div style='background-color: rgba(255, 255, 255, 0.05); padding: 20px; border-radius: 10px; text-align: center; margin: 0 auto;'>
+                <div style='color: #aaa; font-size: 1.1em;'>🔥 これまでに解いた問題数</div>
+                <div style='font-size: 3.5em; font-weight: bold; color: #00cc96; line-height: 1.2;'>{total_solved} <span style='font-size: 0.35em; color: #aaa; font-weight: normal;'>問</span></div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        with col_rank:
+            ranking_list = get_ranking_data(data)
+            top_solved = sorted(ranking_list, key=lambda x: x["solved"], reverse=True)[:3]
+            
+            st.markdown("<div style='color: #aaa; font-size: 0.9em; margin-bottom: 5px;'>🏆 問題数 トップ3</div>", unsafe_allow_html=True)
+            medals = ["🥇", "🥈", "🥉"]
+            for i, user_data in enumerate(top_solved):
+                st.markdown(f"""
+                <div style='background-color: rgba(255,255,255,0.03); padding: 8px 15px; border-left: 3px solid #FFD700; border-radius: 4px; margin-bottom: 5px; display: flex; justify-content: space-between;'>
+                    <span>{medals[i]} <b>{user_data['name']}</b></span>
+                    <span style='color: #00cc96; font-weight: bold;'>{user_data['solved']} 問</span>
+                </div>
+                """, unsafe_allow_html=True)
 
         # --- 📊 スコア計算 (4段階評価・部分点対応) ---
 
@@ -687,6 +832,13 @@ else:
                                 st.rerun()
             else:
                 st.markdown("<div style='color: #666; font-size: 0.9em; text-align: center; padding: 10px;'>まだ履歴がありません</div>", unsafe_allow_html=True)
+                
+
+            st.write("")
+            if st.button("🕒 もっと履歴を見る（直近20件）", use_container_width=True):
+                st.session_state.mode = "tag_search"
+                st.rerun()
+
 
         with col_t:
           st.markdown("#### 🚨 苦手分野 ワースト5 (要復習)")
@@ -948,6 +1100,51 @@ else:
 
 
 
+    # --------------------------------------
+    # モード：ランキング
+    # --------------------------------------
+    elif st.session_state.mode == "ranking":
+        st.markdown("<h1 style='text-align: center;'>🏆 ユーザーランキング</h1>", unsafe_allow_html=True)
+        st.write("全員の学習状況と予想スコアのランキングです．ライバルたちと競い合いましょう！")
+        
+        st.info("💡 ランキングのデータは **2時間に1回** のペースで自動更新されます．")
+
+        with st.spinner("ランキングを集計中..."):
+            ranking_list = get_ranking_data(data)
+            
+        if not ranking_list:
+            st.info("まだデータがありません．")
+        else:
+            col_rank1, col_space, col_rank2 = st.columns([10, 1, 10])
+            
+            with col_rank1:
+                st.markdown("### 🔥 解答問題数 ランキング")
+                solved_ranking = sorted(ranking_list, key=lambda x: x["solved"], reverse=True)
+                for i, u in enumerate(solved_ranking):
+                    rank_icon = ["🥇", "🥈", "🥉"][i] if i < 3 else f"<b>{i+1}位</b>"
+                    is_me = "border: 2px solid #FF69B4;" if u["name"] == st.session_state.username else "border: 1px solid #444;"
+                    st.markdown(f"""
+                    <div style='background-color: rgba(255,255,255,0.03); padding: 10px 15px; border-radius: 8px; margin-bottom: 8px; {is_me} display: flex; justify-content: space-between; align-items: center;'>
+                        <div style='font-size: 1.1em;'>{rank_icon} <span style='margin-left: 10px;'>{u['name']}</span></div>
+                        <div style='font-size: 1.2em; font-weight: bold; color: #00cc96;'>{u['solved']} <span style='font-size: 0.6em; color: #aaa;'>問</span></div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            with col_rank2:
+                st.markdown("### 🎯 予想スコア ランキング (400点満点)")
+                score_ranking = sorted(ranking_list, key=lambda x: x["score"], reverse=True)
+                for i, u in enumerate(score_ranking):
+                    rank_icon = ["🥇", "🥈", "🥉"][i] if i < 3 else f"<b>{i+1}位</b>"
+                    is_me = "border: 2px solid #FF69B4;" if u["name"] == st.session_state.username else "border: 1px solid #444;"
+                    st.markdown(f"""
+                    <div style='background-color: rgba(255,255,255,0.03); padding: 10px 15px; border-radius: 8px; margin-bottom: 8px; {is_me} display: flex; justify-content: space-between; align-items: center;'>
+                        <div style='font-size: 1.1em;'>{rank_icon} <span style='margin-left: 10px;'>{u['name']}</span></div>
+                        <div style='font-size: 1.2em; font-weight: bold; color: #ff4b4b;'>{u['score']:.1f} <span style='font-size: 0.6em; color: #aaa;'>点</span></div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+
+
 
     # --------------------------------------
     # モード：AIおすすめ特訓（頻出＆弱点）
@@ -1137,104 +1334,170 @@ else:
         st.markdown("<h1 style='text-align: center;'>🔍 タグ検索 ＆ 分析</h1>", unsafe_allow_html=True)
         current_user = st.session_state.get("username", "Guest")
         evals = load_evals(current_user)
-        
-        # --- 追加機能：タグの統計情報を集計 ---
-        tag_stats = {}
-        for genre, questions in data.items():
-            for q in questions:
-                q_key = f"{q.get('year', '')}_{q.get('number', '')}"
-                rating_data = evals.get(genre, {}).get(q_key)
-                
-                if rating_data is None: rating, tags = "", q.get("tags", [])
-                elif isinstance(rating_data, str): rating, tags = rating_data, q.get("tags", [])
-                else: rating, tags = rating_data.get("rating", ""), rating_data.get("tags", [])
-                
-                for t in tags:
-                    if t not in tag_stats:
-                        tag_stats[t] = {"count": 0, "〇": 0, "▲": 0, "×": 0, "未": 0}
-                    tag_stats[t]["count"] += 1
-                    if rating == "〇": tag_stats[t]["〇"] += 1
-                    elif rating == "▲": tag_stats[t]["▲"] += 1
-                    elif rating == "×": tag_stats[t]["×"] += 1
-                    else: tag_stats[t]["未"] += 1
-                
-        if not tag_stats:
-            st.info("まだタグが登録されていません．")
-        else:
-            all_tags_list = sorted(list(tag_stats.keys()))
-            
-            # --- 新規追加：タグ一覧と分析データ表 ---
-            with st.expander("📊 タグごとの問題数・正答率データを見る", expanded=True):
-                st.write("💡 **表の上の見出し（「問題数」や「正答率」など）をクリックすると，並び替えができます！**")
-                
-                table_data = []
-                for t, stats in tag_stats.items():
-                    total_eval = stats["〇"] + stats["▲"] + stats["×"]
-                    acc = (stats["〇"] / total_eval * 100) if total_eval > 0 else 0.0
-                    table_data.append({
-                        "タグ名": t,
-                        "問題数": stats["count"],
-                        "正答率 (%)": round(acc, 1),
-                        "🟢 完璧": stats["〇"],
-                        "🟡 復習": stats["▲"],
-                        "🔴 苦手": stats["×"],
-                        "⚪ 未評価": stats["未"]
-                    })
-                
-                # データフレーム（表）として表示
-                st.dataframe(table_data, use_container_width=True, hide_index=True)
 
-            st.markdown("<hr style='margin: 0.5em 0px; border: 1px solid #555;'/>", unsafe_allow_html=True)
-            
-            # --- 既存の検索機能 ---
-            default_idx = all_tags_list.index(st.session_state.selected_tag) if st.session_state.selected_tag in all_tags_list else 0
-                
-            selected_tag = st.selectbox("検索するタグを選んでください", all_tags_list, index=default_idx)
-            st.session_state.selected_tag = selected_tag
-            
-            st.markdown(f"<h3 style='text-align: center;'>🏷️ 「{selected_tag}」の検索結果</h3>", unsafe_allow_html=True)
-            st.markdown("<hr style='margin: 0.5em 0px; border: 1px solid #555;'/>", unsafe_allow_html=True)
-            
-            found = False
-            for genre in sorted(list(data.keys()), key=get_genre_idx):
-                questions = data[genre]
-                sorted_qs = sorted(questions, key=lambda x: (-extract_year_val(x.get('year', '')), extract_num(x.get('number', ''))))
-                
-                for q in sorted_qs:
+        tab_search, tab_history = st.tabs(["🏷️ タグ検索・分析", "🕒 学習履歴 (直近20件)"])
+        
+        # ＝＝＝ 🏷️ タブ1：タグ検索 ＝＝＝
+        with tab_search:
+        
+            # --- 追加機能：タグの統計情報を集計 ---
+            tag_stats = {}
+            for genre, questions in data.items():
+                for q in questions:
                     q_key = f"{q.get('year', '')}_{q.get('number', '')}"
                     rating_data = evals.get(genre, {}).get(q_key)
-                    
+                
                     if rating_data is None: rating, tags = "", q.get("tags", [])
                     elif isinstance(rating_data, str): rating, tags = rating_data, q.get("tags", [])
                     else: rating, tags = rating_data.get("rating", ""), rating_data.get("tags", [])
+                
+                    for t in tags:
+                        if t not in tag_stats:
+                            tag_stats[t] = {"count": 0, "〇": 0, "▲": 0, "×": 0, "未": 0}
+                        tag_stats[t]["count"] += 1
+                        if rating == "〇": tag_stats[t]["〇"] += 1
+                        elif rating == "▲": tag_stats[t]["▲"] += 1
+                        elif rating == "×": tag_stats[t]["×"] += 1
+                        else: tag_stats[t]["未"] += 1
+                
+            if not tag_stats:
+                st.info("まだタグが登録されていません．")
+            else:
+                all_tags_list = sorted(list(tag_stats.keys()))
+            
+                # --- 新規追加：タグ一覧と分析データ表 ---
+                with st.expander("📊 タグごとの問題数・正答率データを見る", expanded=True):
+                    st.write("💡 **表の上の見出し（「問題数」や「正答率」など）をクリックすると，並び替えができます！**")
+                
+                    table_data = []
+                    for t, stats in tag_stats.items():
+                        total_eval = stats["〇"] + stats["▲"] + stats["×"]
+                        acc = (stats["〇"] / total_eval * 100) if total_eval > 0 else 0.0
+                        table_data.append({
+                            "タグ名": t,
+                            "問題数": stats["count"],
+                            "正答率 (%)": round(acc, 1),
+                            "🟢 完璧": stats["〇"],
+                            "🟡 復習": stats["▲"],
+                            "🔴 苦手": stats["×"],
+                            "⚪ 未評価": stats["未"]
+                        })
+                
+                    # データフレーム（表）として表示
+                    st.dataframe(table_data, use_container_width=True, hide_index=True)
+
+                st.markdown("<hr style='margin: 0.5em 0px; border: 1px solid #555;'/>", unsafe_allow_html=True)
+            
+                # --- 既存の検索機能 ---
+                default_idx = all_tags_list.index(st.session_state.selected_tag) if st.session_state.selected_tag in all_tags_list else 0
+                
+                selected_tag = st.selectbox("検索するタグを選んでください", all_tags_list, index=default_idx)
+                st.session_state.selected_tag = selected_tag
+            
+                st.markdown(f"<h3 style='text-align: center;'>🏷️ 「{selected_tag}」の検索結果</h3>", unsafe_allow_html=True)
+                st.markdown("<hr style='margin: 0.5em 0px; border: 1px solid #555;'/>", unsafe_allow_html=True)
+            
+                found = False
+                for genre in sorted(list(data.keys()), key=get_genre_idx):
+                    questions = data[genre]
+                    sorted_qs = sorted(questions, key=lambda x: (-extract_year_val(x.get('year', '')), extract_num(x.get('number', ''))))
+                
+                    for q in sorted_qs:
+                        q_key = f"{q.get('year', '')}_{q.get('number', '')}"
+                        rating_data = evals.get(genre, {}).get(q_key)
+                    
+                        if rating_data is None: rating, tags = "", q.get("tags", [])
+                        elif isinstance(rating_data, str): rating, tags = rating_data, q.get("tags", [])
+                        else: rating, tags = rating_data.get("rating", ""), rating_data.get("tags", [])
                         
-                    if selected_tag in tags:
-                        found = True
-                        rating_icons = {"〇": "🟢 完璧", "▲": "🟡 復習", "×": "🔴 苦手"}
-                        status_text = rating_icons.get(rating, "⚪ 未評価")
+                        if selected_tag in tags:
+                            found = True
+                            rating_icons = {"〇": "🟢 完璧", "▲": "🟡 復習", "×": "🔴 苦手"}
+                            status_text = rating_icons.get(rating, "⚪ 未評価")
                         
-                        col1, col2, col3 = st.columns([2, 6, 2])
-                        with col1: st.write(f"**{status_text}**")
-                        with col2:
-                            st.write(f"**{q.get('year', '')} {genre} - {q.get('number', '')}**")
-                            if tags:
-                                # デザインされたタグを表示
-                                html = '<div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px;">'
-                                for t in tags:
-                                    html += f'<span style="background: linear-gradient(135deg, #8a2be2, #4b0082); color: white; padding: 5px 15px; border-radius: 20px; font-size: 14px; border: 1px solid #bda0cb; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">{t}</span>'
-                                html += '</div>'
-                                st.markdown(html, unsafe_allow_html=True)
-                        with col3:
-                            if st.button("この問題を解く", key=f"tag_search_{genre}_{q_key}", use_container_width=True):
+                            col1, col2, col3 = st.columns([2, 6, 2])
+                            with col1: st.write(f"**{status_text}**")
+                            with col2:
+                                st.write(f"**{q.get('year', '')} {genre} - {q.get('number', '')}**")
+                                if tags:
+                                    # デザインされたタグを表示
+                                    html = '<div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px;">'
+                                    for t in tags:
+                                        html += f'<span style="background: linear-gradient(135deg, #8a2be2, #4b0082); color: white; padding: 5px 15px; border-radius: 20px; font-size: 14px; border: 1px solid #bda0cb; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">{t}</span>'
+                                    html += '</div>'
+                                    st.markdown(html, unsafe_allow_html=True)
+                            with col3:
+                                if st.button("この問題を解く", key=f"tag_search_{genre}_{q_key}", use_container_width=True):
+                                    st.session_state.mode = "quiz"
+                                    st.session_state.quiz_mode = "random" 
+                                    st.session_state.current_genre = genre
+                                    st.session_state.current_q = q
+                                    st.session_state.show_answer = False
+                                    st.rerun()
+                            st.markdown("<hr style='margin: 0.2em 0px; border: 0.5px solid #444;'/>", unsafe_allow_html=True)
+                if not found:
+                    st.write("該当する問題は見つかりませんでした．")
+
+
+        # ＝＝＝ 🕒 タブ2：直近20件の履歴 ＝＝＝
+        with tab_history:
+            st.markdown("### 🕒 直近20件の学習履歴")
+            
+            # 全ての評価データからリスト化（ホーム画面と同じ処理）
+            recent_history_20 = []
+            for g_name, qs in evals.items():
+                for k, val in qs.items():
+                    if isinstance(val, dict):
+                        r = val.get("rating", "")
+                        ts = val.get("timestamp", 0.0)
+                    else:
+                        r = val if isinstance(val, str) else ""
+                        ts = 0.0
+                        
+                    if r in ["〇", "△", "▲", "×"]:
+                       recent_history_20.append({"genre": g_name, "q_key": k, "rating": r, "timestamp": ts})
+
+            # タイムスタンプ順に並び替え
+            recent_history_20.sort(key=lambda x: x["timestamp"])
+            
+            # 💡 最新の20件を取得して反転
+            recent_history_20 = recent_history_20[-20:]
+            recent_history_20.reverse() 
+            
+            if recent_history_20:
+                rating_icons = {"〇": "🟢", "△": "🟡", "▲": "🟠", "×": "🔴"}
+                for i, item in enumerate(recent_history_20):
+                    parts = item['q_key'].split('_')
+                    y_str = parts[0].replace("年度", "") if len(parts) > 0 else ""
+                    num_str = parts[1].replace("問題", "").strip() if len(parts) > 1 else ""
+                    icon = rating_icons.get(item['rating'], "⚪")
+                    
+                    q_match = next((q for q in data.get(item['genre'], []) if f"{q.get('year', '')}_{q.get('number', '')}" == item['q_key']), None)
+                    
+                    if q_match:
+                        # 画面が広く使えるので、ボタンとの比率を [8, 2] にしてゆったり配置
+                        col_h1, col_h2 = st.columns([8, 2])
+                        with col_h1:
+                            st.markdown(f"""
+                            <div style="background-color: rgba(255,255,255,0.03); padding: 12px 20px; border-left: 4px solid #444; border-radius: 4px; margin-bottom: 5px;">
+                                <span style="font-size: 0.85em; color: #aaa;">{y_str}年度 ｜ {item['genre']}</span><br>
+                                <span style="font-size: 1.3em; margin-right: 10px;">{icon}</span><span style="font-weight: bold; font-size: 1.1em;">問 {num_str}</span>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                        with col_h2:
+                            st.write("")
+                            if st.button("復習する", key=f"hist20_jump_{i}_{item['q_key']}", use_container_width=True):
                                 st.session_state.mode = "quiz"
                                 st.session_state.quiz_mode = "random" 
-                                st.session_state.current_genre = genre
-                                st.session_state.current_q = q
+                                st.session_state.current_genre = item['genre']
+                                st.session_state.current_q = q_match
                                 st.session_state.show_answer = False
                                 st.rerun()
-                        st.markdown("<hr style='margin: 0.2em 0px; border: 0.5px solid #444;'/>", unsafe_allow_html=True)
-            if not found:
-                st.write("該当する問題は見つかりませんでした．")
+                        # 区切り線
+                        st.markdown("<hr style='margin: 0.3em 0px; border: 0.5px dashed #444;'/>", unsafe_allow_html=True)
+            else:
+                st.info("まだ学習履歴がありません．")
 
     # --------------------------------------
     # モード：成績リスト（年度別）＆ リセット復元
