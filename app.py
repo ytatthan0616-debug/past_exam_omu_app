@@ -997,17 +997,17 @@ else:
                     base_score = sum(tag_counts.get(t, 0) for t in q.get("tags", []))
                     if base_score == 0: base_score = 1 
                     
-                    if r == "×": mult = 1.5      
+                    # 💡 改善1：未着手の倍率を「1.0」から「2.0」へ大幅アップ！（一番優先されるようになります）
+                    if r == "": mult = 2.0       # 未着手を最優先！
+                    elif r == "×": mult = 1.5      
                     elif r == "▲": mult = 1.2
-                    elif r == "": mult = 1.0     
                     elif r == "△": mult = 0.5
                     elif r == "〇": mult = 0.05   
                     else: mult = 1.0
                     
-                    # 💡 改善3：マンネリ防止！
-                    # スコアに 0.0 〜 0.1 のごく僅かなランダム値を足すことで、
-                    # 完全に同点の問題があった場合に、毎回違う順番で選ばれるようにする
-                    final_score = (base_score * mult) + random.uniform(0, 0.1)
+                    # 💡 改善2：ランダム性を「足し算」から「掛け算（±20%の揺らぎ）」に変更！
+                    # 例：スコア10の問題が、毎回 8.0 〜 12.0 の間でランダムに変動します
+                    final_score = (base_score * mult) * random.uniform(0.8, 1.2)
                     
                     scored_qs.append({"genre": g, "q": q, "score": final_score})
             
