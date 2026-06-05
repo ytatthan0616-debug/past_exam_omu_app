@@ -112,6 +112,8 @@ def save_config(conf):
     ref = db.reference(f'users/{username}/config')
     ref.set(conf)
 
+# 💡 修正：通信量爆発の最大の原因！難易度計算のデータを1時間キャッシュする
+@st.cache_data(ttl=3600) 
 def get_global_q_stats():
     users_data = db.reference('users').get()
     q_stats = {}
@@ -121,20 +123,22 @@ def get_global_q_stats():
         evals = udata.get('evals', {})
         for g, qs in evals.items():
             for k, val in qs.items():
-                # みんなのデータも全角から半角に戻して集計
                 orig_k = k.replace('．', '.').replace('＃', '#')
+                
+                # 💡 修正：ジャンル名を含めた「完全な一意のキー」を作成して混線を防ぐ！
+                unique_k = f"{g}_{orig_k}"
+                
                 rating = val.get("rating", "") if isinstance(val, dict) else (val if isinstance(val, str) else "")
                 
                 if rating in ["〇", "△", "▲", "×"]:
-                    if orig_k not in q_stats:
-                        q_stats[orig_k] = {"ans": 0, "score": 0.0}
-                    q_stats[orig_k]["ans"] += 1
+                    if unique_k not in q_stats:
+                        q_stats[unique_k] = {"ans": 0, "score": 0.0}
+                    q_stats[unique_k]["ans"] += 1
                     
-                    if rating == "〇": q_stats[orig_k]["score"] += 1.0
-                    elif rating == "△": q_stats[orig_k]["score"] += 0.66
-                    elif rating == "▲": q_stats[orig_k]["score"] += 0.33
+                    if rating == "〇": q_stats[unique_k]["score"] += 1.0
+                    elif rating == "△": q_stats[unique_k]["score"] += 0.66
+                    elif rating == "▲": q_stats[unique_k]["score"] += 0.33
     return q_stats
-
 def get_difficulty_ui(q_key, q_stats):
     if q_key not in q_stats or q_stats[q_key]["ans"] == 0:
         return "<span style='color: #888; font-size: 0.6em; font-weight: normal;'>📊 難易度: データなし</span>"
@@ -1406,7 +1410,8 @@ else:
             st.session_state.ai_generated_answer = None
         
         global_stats = get_global_q_stats()
-        diff_ui = get_difficulty_ui(q_key, global_stats)
+        unique_q_key = f"{current_genre}_{q_key}"
+        diff_ui = get_difficulty_ui(unique_q_key, global_stats)
         
         st.markdown(f"<h3 style='text-align: center;'>【出題】{q.get('year', '')} {current_genre} - {q.get('number', '')} <br><div style='margin-top: 8px;'>{diff_ui}</div></h3>", unsafe_allow_html=True)
         
