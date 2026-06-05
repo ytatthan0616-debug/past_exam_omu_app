@@ -304,6 +304,10 @@ if st.sidebar.button("📝 ランダム演習", use_container_width=True):
     st.session_state.current_q = None
     st.rerun()
 
+if st.sidebar.button("🎯 頻出＆弱点特訓 (AIおすすめ)", use_container_width=True):
+    st.session_state.mode = "recommend_setup"
+    st.rerun()
+
 if st.sidebar.button("🛤️ 順番に解く（コース）", use_container_width=True):
     st.session_state.mode = "seq_setup"
     st.rerun()
@@ -937,6 +941,94 @@ else:
             save_config(conf)
             st.success("設定を保存しました！")
             st.rerun()
+
+
+
+
+    # --------------------------------------
+    # モード：AIおすすめ特訓（頻出＆弱点）
+    # --------------------------------------
+    elif st.session_state.mode == "recommend_setup":
+        st.markdown("<h2 style='text-align: center;'>🎯 AIおすすめ特訓 (頻出 ＆ 弱点)</h2>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center;'>出題頻度が高く、かつあなたが苦手としている（または未着手の）問題を優先的にピックアップします．</p>", unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            target_genre = st.selectbox("📁 対策する分野", ["全分野からミックス"] + GENRE_ORDER)
+        with col2:
+            num_recommend = st.number_input("🎯 出題数", min_value=1, max_value=20, value=5)
+            
+        st.write("")
+        
+        if st.button("🚀 おすすめコースを生成してスタート！", type="primary", use_container_width=True):
+            current_user = st.session_state.get("username", "Guest")
+            evals = load_evals(current_user)
+            
+            # 💡 改善1：指定された分野のタグだけを集計する（ムダな計算を省いて高速化）
+            tag_counts = {}
+            for g, qs in data.items():
+                if target_genre != "全分野からミックス" and g != target_genre:
+                    continue # 対象外の分野はタグ集計からも除外する
+                    
+                for q in qs:
+                    for t in q.get("tags", []):
+                        tag_counts[t] = tag_counts.get(t, 0) + 1
+            
+            # 2. 全問題に「おすすめ度スコア」をつける
+            scored_qs = []
+            import random # 同点シャッフル用
+            
+            for g, qs in data.items():
+                if target_genre != "全分野からミックス" and g != target_genre:
+                    continue
+                    
+                # 💡 改善2：分野ごとの成績を先に変数に入れておく（ループのたびに辞書を探す処理を減らして高速化）
+                g_evals = evals.get(g, {})
+                    
+                for q in qs:
+                    q_key = f"{q.get('year', '')}_{q.get('number', '')}"
+                    rating_data = g_evals.get(q_key)
+                    
+                    if rating_data is None: r = ""
+                    elif isinstance(rating_data, str): r = rating_data
+                    else: r = rating_data.get("rating", "")
+                    
+                    # 基礎スコア：その問題に含まれるタグの出現回数の合計
+                    base_score = sum(tag_counts.get(t, 0) for t in q.get("tags", []))
+                    if base_score == 0: base_score = 1 
+                    
+                    if r == "×": mult = 1.5      
+                    elif r == "▲": mult = 1.2
+                    elif r == "": mult = 1.0     
+                    elif r == "△": mult = 0.5
+                    elif r == "〇": mult = 0.05   
+                    else: mult = 1.0
+                    
+                    # 💡 改善3：マンネリ防止！
+                    # スコアに 0.0 〜 0.1 のごく僅かなランダム値を足すことで、
+                    # 完全に同点の問題があった場合に、毎回違う順番で選ばれるようにする
+                    final_score = (base_score * mult) + random.uniform(0, 0.1)
+                    
+                    scored_qs.append({"genre": g, "q": q, "score": final_score})
+            
+            # 3. スコアが高い順に並び替え、上位 N 問を抽出
+            scored_qs.sort(key=lambda x: x["score"], reverse=True)
+            top_qs = scored_qs[:num_recommend]
+            
+            if top_qs:
+                st.session_state.seq_list = [{"genre": item["genre"], "q": item["q"]} for item in top_qs]
+                st.session_state.seq_idx = 0
+                st.session_state.quiz_mode = "sequential"
+                
+                nxt = st.session_state.seq_list[0]
+                st.session_state.current_genre = nxt["genre"]
+                st.session_state.current_q = nxt["q"]
+                st.session_state.mode = "quiz"
+                st.session_state.show_answer = False
+                st.rerun()
+            else:
+                st.error("おすすめできる問題が見つかりませんでした．")
+
 
     # --------------------------------------
     # モード：順番に解く（コース設定）
