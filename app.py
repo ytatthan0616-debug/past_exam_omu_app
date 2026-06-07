@@ -536,12 +536,25 @@ else:
                     total_solved += 1
         
         # 画面中央に目立つように配置 ＋ 右側にランキングTOP3
+        # 画面中央に目立つように配置 ＋ 右側にランキングTOP3
         col_main, col_rank = st.columns([5, 3])
         
         with col_main:
+            # --- 💡 ランク計算を追加 ---
+            rank_threshold = 10
+            current_rank_idx = total_solved // rank_threshold
+            rank_names = ["猫見習い 🐾", "駆け出しハンター 🐈", "一人前キャット 🐅", "ベテラン猫 🦁", "伝説の猫 👑"]
+            current_rank = rank_names[min(current_rank_idx, len(rank_names)-1)]
+            next_req = rank_threshold - (total_solved % rank_threshold)
+            progress = (total_solved % rank_threshold) / rank_threshold
+            
+            # 💡 注意：この中の """ のすぐ後に ```html などを書かないでください！
             st.markdown(f"""
             <div style='background-color: rgba(255, 255, 255, 0.05); padding: 20px; border-radius: 10px; text-align: center; margin: 0 auto;'>
-                <div style='color: #aaa; font-size: 1.1em;'>🔥 これまでに解いた問題数</div>
+                <div style='font-size: 1.2em; color: #FFD700; margin-bottom: 5px;'>現在のランク: <b>{current_rank}</b></div>
+                <div style='color: #aaa; font-size: 0.9em; margin-bottom: 5px;'>次のランクまであと {next_req} 問！</div>
+                <progress value="{progress}" max="1" style="width: 80%; height: 8px; margin-bottom: 15px;"></progress>
+                <div style='color: #aaa; font-size: 1.1em;'>🔥 これまでに解き明かした問題数</div>
                 <div style='font-size: 3.5em; font-weight: bold; color: #00cc96; line-height: 1.2;'>{total_solved} <span style='font-size: 0.35em; color: #aaa; font-weight: normal;'>問</span></div>
             </div>
             """, unsafe_allow_html=True)
@@ -1906,6 +1919,26 @@ else:
                             st.error("詳細を入力してください．")
 
             st.markdown("<h3 style='text-align: center;'>自己評価 ＆ タグ付け</h3>", unsafe_allow_html=True)
+
+            # 💡 追加：ラジオボタンを巨大化して押しやすくする魔法のCSS
+            st.markdown("""
+            <style>
+            div[role="radiogroup"] > label {
+                padding: 10px 15px !important;
+                background-color: rgba(255, 255, 255, 0.05) !important;
+                border-radius: 10px !important;
+                border: 1px solid #444 !important;
+                margin-right: 5px !important;
+                cursor: pointer !important;
+                transition: all 0.2s ease !important;
+            }
+            div[role="radiogroup"] > label:hover {
+                background-color: rgba(255, 255, 255, 0.1) !important;
+                border-color: #FF69B4 !important;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+
             current_user = st.session_state.get("username", "Guest")
             evals = load_evals(current_user)
             rating_data = evals.get(current_genre, {}).get(q_key)
@@ -1913,19 +1946,21 @@ else:
             elif isinstance(rating_data, str): rating, current_tags = rating_data, q.get("tags", [])
             else: rating, current_tags = rating_data.get("rating", ""), rating_data.get("tags", [])
 
-            col_eval1, col_eval2, col_eval3 = st.columns([1, 4, 1])
+            col_eval1, col_eval2, col_eval3 = st.columns([1, 6, 1]) # 幅を広げてボタンを配置しやすく
             with col_eval2:
                 if current_tags:
                     st.write("🏷️ **登録済みのタグ：**")
                     render_beautiful_tags(current_tags)
                 
-                options = ["〇 (完璧)", "△ (だいたい解けた)", "▲ (少し解けた・要復習)", "× (全くわからなかった)"]
-                if rating == "△": default_radio_idx = 1
-                elif rating == "▲": default_radio_idx = 2
-                elif rating == "×": default_radio_idx = 3
+                # 💡 修正：絵文字を入れて視覚的に分かりやすく、大きなボタンにします
+                options = ["⚪ 未選択", "🟢 完璧", "🟡 だいたい解けた", "🟠 要復習", "🔴 わからなかった"]
+                if rating == "〇": default_radio_idx = 1
+                elif rating == "△": default_radio_idx = 2
+                elif rating == "▲": default_radio_idx = 3
+                elif rating == "×": default_radio_idx = 4
                 else: default_radio_idx = 0
+                
                 selected_rating = st.radio("この問題の理解度は？", options, index=default_radio_idx, horizontal=True)
-
 
                 current_tags_str = ", ".join(current_tags)
                 input_tags_str = st.text_input("🏷️ 新しいタグを追加（カンマ区切りで入力）", value=current_tags_str)
@@ -1934,32 +1969,47 @@ else:
                 btn_text = "評価とタグを保存して次の問題へ" if st.session_state.quiz_mode == "random" or st.session_state.seq_idx < len(st.session_state.seq_list) - 1 else "評価を保存してコース完了！"
                 
                 if st.button(btn_text, type="primary", use_container_width=True):
+                    # 💡 追加：未選択のまま押したら、真っ赤なエラーを出してここで処理をストップさせる！
+                    if selected_rating == "⚪ 未選択":
+                        st.error("🚨 【ストップ！】評価が「未選択」です！集計データを作るために、どれか1つを選んでから保存してください。")
+                        st.stop() # ここでプログラムを強制停止するので、絶対に次へ進めません
+
                     if current_genre not in evals: evals[current_genre] = {}
                     
-                    # 💡 修正：全角カンマを半角カンマに統一してから、確実に分割する
                     normalized_tags_str = input_tags_str.replace("，", ",")
                     new_tags = [t.strip() for t in normalized_tags_str.split(",") if t.strip()]
             
-                    # 1. 💡 修正：いつ解いたか（現在時刻）も一緒に保存するように追加！
                     import time
+                    final_rating = ""
+                    if "完璧" in selected_rating: final_rating = "〇"
+                    elif "だいたい" in selected_rating: final_rating = "△"
+                    elif "要復習" in selected_rating: final_rating = "▲"
+                    elif "わからなかった" in selected_rating: final_rating = "×"
+                    
                     eval_data = {
-                        "rating": selected_rating[0], 
+                        "rating": final_rating, 
                         "tags": new_tags,
-                        "timestamp": time.time()  # 解いた瞬間の時間を記録
+                        "timestamp": time.time()
                     }
         
-                    # 2. ローカル（手元の画面用）のデータを更新する
                     evals[current_genre][q_key] = eval_data
-        
-                    # 3. 💡 ここが最大の変更点：Firebaseには「この1問だけ」をピンポイントで送信する！
                     update_single_eval(current_genre, q_key, eval_data)
-                    
+                    st.toast("✨ 評価とタグを保存しました！", icon="🎉")
+
+                    # 次の問題への遷移処理
                     if st.session_state.quiz_mode == "random":
-                        st.session_state.current_q = random.choice(data[current_genre]); st.session_state.show_answer = False; st.rerun()
+                        st.session_state.current_q = random.choice(data[current_genre])
+                        st.session_state.show_answer = False
+                        st.rerun()
                     elif st.session_state.quiz_mode == "sequential":
                         st.session_state.seq_idx += 1
                         if st.session_state.seq_idx < len(st.session_state.seq_list):
                             nxt = st.session_state.seq_list[st.session_state.seq_idx]
-                            st.session_state.current_genre = nxt["genre"]; st.session_state.current_q = nxt["q"]; st.session_state.show_answer = False; st.rerun()
+                            st.session_state.current_genre = nxt["genre"]
+                            st.session_state.current_q = nxt["q"]
+                            st.session_state.show_answer = False
+                            st.rerun()
                         else:
-                            st.session_state.just_completed = True; st.session_state.mode = "home"; st.rerun()
+                            st.session_state.just_completed = True
+                            st.session_state.mode = "home"
+                            st.rerun()
