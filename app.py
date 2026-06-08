@@ -1691,42 +1691,52 @@ else:
         st.markdown(f"<h3 style='text-align: center;'>【出題】{q.get('year', '')} {current_genre} - {q.get('number', '')} <br><div style='margin-top: 8px;'>{diff_ui}</div></h3>", unsafe_allow_html=True)
         
         if os.path.exists(q.get("question_image", "")):
-         # 1. 確実な中央寄せのために「カラム」を使って左右に見えない余白を作る
-         # 比率を [2, 6, 1] にすることで、画像がちょうど良いバランスで中央に配置されます
-         col_space1, col_img, col_space2 = st.columns([2, 6, 1])
-         
-         with col_img:
-             # カラムの幅いっぱいに広げつつ、CSSで高さを制限する
-             st.image(q.get("question_image", ""), use_container_width=True)
-         
-         # ====================================================
-         # 💡 綺麗なUIと装飾専用のCSS
-         # ====================================================
-         st.markdown("<hr style='margin: 2em 0px 1em 0px; border: 1px solid #444;'/>", unsafe_allow_html=True)
-         
-         st.markdown("<div style='color: #aaa; font-size: 0.9em; margin-bottom: 10px; text-align: center;'>📷 <b>問題画像</b> ｜ 画像をクリックすると全画面で拡大表示できます．</div>", unsafe_allow_html=True)
-         
-         st.markdown("<hr style='margin: 1em 0px 2em 0px; border: 1px dashed #444;'/>", unsafe_allow_html=True)
+            # 💡 修正：st.image を使わず、直接 HTML img タグで描画する
+            import base64
+            
+            # 画像をBase64に変換して埋め込む（これで外部ファイル依存も減ります）
+            with open(q.get("question_image", ""), "rb") as image_file:
+                encoded_string = base64.b64encode(image_file.read()).decode()
+            
+            st.markdown(f"""
+            <div class="fixed-image-container">
+                <img src="data:image/png;base64,{encoded_string}" class="problem-image">
+            </div>
+            """, unsafe_allow_html=True)
 
-         # 画像の装飾（白背景、角丸、影、高さ制限）だけをCSSで適用する
-         st.markdown("""
-         <style>
-         /* 画像本体の見た目を整え、カラムの中での中央配置を念押しする */
-         div[data-testid="stImage"] img {
-             display: block !important;
-             margin: 0 auto !important;
-             max-height: 500px !important; 
-             width: auto !important;
-             max-width: 100% !important;
-             object-fit: contain !important;
-             background-color: #ffffff !important;
-             padding: 15px !important;
-             border-radius: 10px !important;
-             box-shadow: 0px 4px 15px rgba(0, 0, 0, 0.3) !important;
-         }
-         </style>
-         """, unsafe_allow_html=True)
-        
+            # 💡 修正：CSSを完全に分離・強化（HTMLで描画した対象にのみ強制適用）
+            st.markdown("""
+            <style>
+            /* 親コンテナを画面いっぱいに広げ、Flexで中央寄せ */
+            .fixed-image-container {
+                display: flex !important;
+                justify-content: center !important;
+                align-items: center !important;
+                width: 100% !important;
+                margin: 20px 0 !important;
+            }
+            
+            /* 画像本体の強制中央表示・白背景・影 */
+            .problem-image {
+                background-color: #ffffff !important;
+                padding: 20px !important;
+                border-radius: 12px !important;
+                box-shadow: 0px 10px 30px rgba(0, 0, 0, 0.8) !important;
+                max-height: 600px !important;
+                width: auto !important;
+                max-width: 90% !important;
+                display: block !important;
+                margin-left: auto !important;
+                margin-right: auto !important;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            # 以下は既存のUI
+            st.markdown("<hr style='margin: 2em 0px 1em 0px; border: 1px solid #444;'/>", unsafe_allow_html=True)
+            st.markdown("<div style='color: #aaa; font-size: 0.9em; margin-bottom: 10px; text-align: center;'>📷 <b>問題画像</b></div>", unsafe_allow_html=True)
+            st.markdown("<hr style='margin: 1em 0px 2em 0px; border: 1px dashed #444;'/>", unsafe_allow_html=True)
+
         if not st.session_state.show_answer:
             st.write("") 
             col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
@@ -1917,9 +1927,10 @@ else:
                         else:
                             st.error("詳細を入力してください．")
 
+            # --- 自己評価エリア ---
             st.markdown("<h3 style='text-align: center;'>自己評価 ＆ タグ付け</h3>", unsafe_allow_html=True)
 
-            # 💡 追加：ラジオボタンを巨大化して押しやすくする魔法のCSS
+            # 巨大ボタン化のCSS
             st.markdown("""
             <style>
             div[role="radiogroup"] > label {
@@ -1929,11 +1940,6 @@ else:
                 border: 1px solid #444 !important;
                 margin-right: 5px !important;
                 cursor: pointer !important;
-                transition: all 0.2s ease !important;
-            }
-            div[role="radiogroup"] > label:hover {
-                background-color: rgba(255, 255, 255, 0.1) !important;
-                border-color: #FF69B4 !important;
             }
             </style>
             """, unsafe_allow_html=True)
@@ -1945,70 +1951,64 @@ else:
             elif isinstance(rating_data, str): rating, current_tags = rating_data, q.get("tags", [])
             else: rating, current_tags = rating_data.get("rating", ""), rating_data.get("tags", [])
 
-            col_eval1, col_eval2, col_eval3 = st.columns([1, 6, 1]) # 幅を広げてボタンを配置しやすく
-            with col_eval2:
-                if current_tags:
-                    st.write("🏷️ **登録済みのタグ：**")
-                    render_beautiful_tags(current_tags)
-                
-                # 💡 修正：絵文字を入れて視覚的に分かりやすく、大きなボタンにします
-                options = ["⚪ 未選択", "🟢 完璧", "🟡 だいたい解けた", "🟠 要復習", "🔴 わからなかった"]
-                if rating == "〇": default_radio_idx = 1
-                elif rating == "△": default_radio_idx = 2
-                elif rating == "▲": default_radio_idx = 3
-                elif rating == "×": default_radio_idx = 4
-                else: default_radio_idx = 0
-                
-                selected_rating = st.radio("この問題の理解度は？", options, index=default_radio_idx, horizontal=True)
-
-                current_tags_str = ", ".join(current_tags)
-                input_tags_str = st.text_input("🏷️ 新しいタグを追加（カンマ区切りで入力）", value=current_tags_str)
-                
-                st.write("")
-                btn_text = "評価とタグを保存して次の問題へ" if st.session_state.quiz_mode == "random" or st.session_state.seq_idx < len(st.session_state.seq_list) - 1 else "評価を保存してコース完了！"
-                
-                if st.button(btn_text, type="primary", use_container_width=True):
-                    # 💡 追加：未選択のまま押したら、真っ赤なエラーを出してここで処理をストップさせる！
-                    if selected_rating == "⚪ 未選択":
-                        st.error("🚨 【ストップ！】評価が「未選択」です！集計データを作るために、どれか1つを選んでから保存してください。")
-                        st.stop() # ここでプログラムを強制停止するので、絶対に次へ進めません
-
-                    if current_genre not in evals: evals[current_genre] = {}
-                    
-                    normalized_tags_str = input_tags_str.replace("，", ",")
-                    new_tags = [t.strip() for t in normalized_tags_str.split(",") if t.strip()]
+            # タグ表示（ここはタブ切り替えなどでレイアウトが崩れにくいようにシンプルな配置に）
+            if current_tags:
+                st.write("🏷️ **登録済みのタグ：**")
+                render_beautiful_tags(current_tags)
             
-                    import time
-                    final_rating = ""
-                    if "完璧" in selected_rating: final_rating = "〇"
-                    elif "だいたい" in selected_rating: final_rating = "△"
-                    elif "要復習" in selected_rating: final_rating = "▲"
-                    elif "わからなかった" in selected_rating: final_rating = "×"
-                    
-                    eval_data = {
-                        "rating": final_rating, 
-                        "tags": new_tags,
-                        "timestamp": time.time()
-                    }
-        
-                    evals[current_genre][q_key] = eval_data
-                    update_single_eval(current_genre, q_key, eval_data)
-                    st.toast("✨ 評価とタグを保存しました！", icon="🎉")
+            options = ["⚪ 未選択", "🟢 完璧", "🟡 だいたい解けた", "🟠 要復習", "🔴 わからなかった"]
+            
+            # 評価の初期選択位置
+            idx = 0
+            if rating == "〇": idx = 1
+            elif rating == "△": idx = 2
+            elif rating == "▲": idx = 3
+            elif rating == "×": idx = 4
+            
+            selected_rating = st.radio("この問題の理解度は？", options, index=idx, horizontal=True)
+            input_tags_str = st.text_input("🏷️ 新しいタグを追加（カンマ区切り）", value=", ".join(current_tags))
+            
+            st.write("")
+            btn_text = "評価とタグを保存して次の問題へ" if st.session_state.quiz_mode == "random" or st.session_state.seq_idx < len(st.session_state.seq_list) - 1 else "評価を保存してコース完了！"
+            
+            if st.button(btn_text, type="primary", use_container_width=True):
+                if selected_rating == "⚪ 未選択":
+                    st.error("🚨 【ストップ！】評価が「未選択」です！集計のためにどれか1つを選んでください。")
+                    st.stop()
 
-                    # 次の問題への遷移処理
-                    if st.session_state.quiz_mode == "random":
-                        st.session_state.current_q = random.choice(data[current_genre])
-                        st.session_state.show_answer = False
-                        st.rerun()
-                    elif st.session_state.quiz_mode == "sequential":
-                        st.session_state.seq_idx += 1
-                        if st.session_state.seq_idx < len(st.session_state.seq_list):
-                            nxt = st.session_state.seq_list[st.session_state.seq_idx]
-                            st.session_state.current_genre = nxt["genre"]
-                            st.session_state.current_q = nxt["q"]
-                            st.session_state.show_answer = False
-                            st.rerun()
-                        else:
-                            st.session_state.just_completed = True
-                            st.session_state.mode = "home"
-                            st.rerun()
+                if current_genre not in evals: evals[current_genre] = {}
+                
+                new_tags = [t.strip() for t in input_tags_str.replace("，", ",").split(",") if t.strip()]
+                
+                final_rating = ""
+                if "完璧" in selected_rating: final_rating = "〇"
+                elif "だいたい" in selected_rating: final_rating = "△"
+                elif "要復習" in selected_rating: final_rating = "▲"
+                elif "わからなかった" in selected_rating: final_rating = "×"
+                
+                eval_data = {
+                    "rating": final_rating, 
+                    "tags": new_tags,
+                    "timestamp": time.time()
+                }
+    
+                evals[current_genre][q_key] = eval_data
+                update_single_eval(current_genre, q_key, eval_data)
+                st.toast("✨ 評価とタグを保存しました！", icon="🎉")
+
+                # 次の問題への遷移
+                if st.session_state.quiz_mode == "random":
+                    st.session_state.current_q = random.choice(data[current_genre])
+                    st.session_state.show_answer = False
+                    st.rerun()
+                elif st.session_state.seq_idx + 1 < len(st.session_state.seq_list):
+                    st.session_state.seq_idx += 1
+                    nxt = st.session_state.seq_list[st.session_state.seq_idx]
+                    st.session_state.current_genre = nxt["genre"]
+                    st.session_state.current_q = nxt["q"]
+                    st.session_state.show_answer = False
+                    st.rerun()
+                else:
+                    st.session_state.just_completed = True
+                    st.session_state.mode = "home"
+                    st.rerun()
