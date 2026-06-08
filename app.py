@@ -472,8 +472,7 @@ st.markdown("<hr style='border: 0.5px solid #444;'/>", unsafe_allow_html=True)
 st.markdown("""
 <div style="font-size: 0.8em; color: #888; text-align: center;">
     <b>【利用規約・著作権について】</b><br>
-    入試問題は受験予定者が受験の準備に使用することや、教育機関の教職員が教育の一環として使用することを目的としています。<br>
-    それ以外の目的での複製、転載、転用は禁止します。また、入試問題を二次利用する場合は別途著作権許諾処理等を行っていただく必要があります。
+    入試問題は受験予定者が受験の準備に使用することや、教育機関の教職員が教育の一環として使用することを目的としています。
 </div>
 """, unsafe_allow_html=True)
 
