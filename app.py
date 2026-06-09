@@ -1164,6 +1164,20 @@ else:
     elif st.session_state.mode == "recommend_setup":
         st.markdown("<h2 style='text-align: center;'>🎯 AIおすすめ特訓 (頻出 ＆ 弱点)</h2>", unsafe_allow_html=True)
         st.markdown("<p style='text-align: center;'>出題頻度が高く、かつあなたが苦手としている（または未着手の）問題を優先的にピックアップします．</p>", unsafe_allow_html=True)
+
+        # ==========================================
+        # 💡 追加：AIのおすすめアルゴリズムの解説（折りたたみ）
+        # ==========================================
+        with st.expander("💡 AIが問題を選ぶ仕組み（ガチャ方式）", expanded=False):
+            st.markdown("""
+            このモードでは，独自のアルゴリズムで全ての問題に「おすすめスコア」をつけ，**上位候補の中から毎回ランダムに出題**します（ピックアップガチャ方式）．
+            
+            * **🥇 未着手・苦手を最優先：** まだ解いていない問題や，「×（わからなかった）」をつけた問題はスコアが数百倍に跳ね上がり，最優先で選ばれます．
+            * **🔥 頻出タグボーナス：** 過去問でよく出題される重要タグ（分野）が含まれる問題ほど，スコアが高くなります．
+            * **🎲 飽きないランダム性：** 「〇（完璧）」にした問題は一旦リストから外れ，上位候補から毎回違う組み合わせが選ばれるため，いつでも新鮮なセットで特訓できます！
+            """)
+        
+        st.write("") # 少し余白をあける
         
         col1, col2 = st.columns(2)
         with col1:
@@ -1195,7 +1209,6 @@ else:
                 if target_genre != "全分野からミックス" and g != target_genre:
                     continue
                     
-                # 💡 改善2：分野ごとの成績を先に変数に入れておく（ループのたびに辞書を探す処理を減らして高速化）
                 g_evals = evals.get(g, {})
                     
                 for q in qs:
@@ -1210,37 +1223,33 @@ else:
                     base_score = sum(tag_counts.get(t, 0) for t in q.get("tags", []))
                     if base_score == 0: base_score = 1 
                     
-                    # 💡 改善1：未着手の倍率を「1.0」から「2.0」へ大幅アップ！（一番優先されるようになります）
-                    if r == "": mult = 2.0       # 未着手を最優先！
-                    elif r == "×": mult = 1.5      
-                    elif r == "▲": mult = 1.2
-                    elif r == "△": mult = 0.5
-                    elif r == "〇": mult = 0.05   
-                    else: mult = 1.0
+                    if r == "": mult = 1000       # 未着手は絶対の最優先！
+                    elif r == "×": mult = 500     # 苦手な問題も超優先
+                    elif r == "▲": mult = 100     # 要復習
+                    elif r == "△": mult = 10      # だいたい解けた
+                    elif r == "〇": mult = 1       # 完璧
+                    else: mult = 1000
                     
-                    # 💡 改善2：ランダム性を「足し算」から「掛け算（±20%の揺らぎ）」に変更！
-                    # 例：スコア10の問題が、毎回 8.0 〜 12.0 の間でランダムに変動します
-                    final_score = (base_score * mult) * random.uniform(0.8, 1.2)
+                    # 💡 乱数強化：±20% から ±50% の大きな揺らぎに変更！
+                    final_score = (base_score * mult) * random.uniform(0.5, 1.5)
                     
                     scored_qs.append({"genre": g, "q": q, "score": final_score})
             
-            # 3. スコアが高い順に並び替え、上位 N 問を抽出
+            # 3. スコアが高い順に並び替え
             scored_qs.sort(key=lambda x: x["score"], reverse=True)
-            top_qs = scored_qs[:num_recommend]
+            
+            # 💡 ガチャシステム導入：上位「出題数の3倍」を候補プールとし、そこからランダムに抽出！
+            pool_size = min(len(scored_qs), num_recommend * 5)
+            candidate_pool = scored_qs[:pool_size]
+            
+            # 候補の中から指定された数だけランダムに引く
+            top_qs = random.sample(candidate_pool, min(len(candidate_pool), num_recommend))
+            
+            # 💡 出題順序も毎回バラバラにシャッフルする
+            random.shuffle(top_qs)
             
             if top_qs:
                 st.session_state.seq_list = [{"genre": item["genre"], "q": item["q"]} for item in top_qs]
-                st.session_state.seq_idx = 0
-                st.session_state.quiz_mode = "sequential"
-                
-                nxt = st.session_state.seq_list[0]
-                st.session_state.current_genre = nxt["genre"]
-                st.session_state.current_q = nxt["q"]
-                st.session_state.mode = "quiz"
-                st.session_state.show_answer = False
-                st.rerun()
-            else:
-                st.error("おすすめできる問題が見つかりませんでした．")
 
 
     # --------------------------------------
