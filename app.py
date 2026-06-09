@@ -1172,9 +1172,9 @@ else:
             st.markdown("""
             このモードでは，独自のアルゴリズムで全ての問題に「おすすめスコア」をつけ，**上位候補の中から毎回ランダムに出題**します（ピックアップガチャ方式）．
             
-            * **🥇 未着手・苦手を最優先：** まだ解いていない問題や，「×（わからなかった）」をつけた問題はスコアが数百倍に跳ね上がり，最優先で選ばれます．
+            * **🥇 未着手・苦手を最優先：** まだ解いていない問題や，「×（わからなかった）」をつけた問題は最優先で選ばれます．
             * **🔥 頻出タグボーナス：** 過去問でよく出題される重要タグ（分野）が含まれる問題ほど，スコアが高くなります．
-            * **🎲 飽きないランダム性：** 「〇（完璧）」にした問題は一旦リストから外れ，上位候補から毎回違う組み合わせが選ばれるため，いつでも新鮮なセットで特訓できます！
+            * **🎲 飽きないランダム性：** 「〇（完璧）」にした問題は一旦リストから外れ，上位候補から毎回違う組み合わせが選ばれます．
             """)
         
         st.write("") # 少し余白をあける
@@ -1239,7 +1239,7 @@ else:
             scored_qs.sort(key=lambda x: x["score"], reverse=True)
             
             # 💡 ガチャシステム導入：上位「出題数の3倍」を候補プールとし、そこからランダムに抽出！
-            pool_size = min(len(scored_qs), num_recommend * 5)
+            pool_size = min(len(scored_qs), num_recommend * 3)
             candidate_pool = scored_qs[:pool_size]
             
             # 候補の中から指定された数だけランダムに引く
@@ -1250,6 +1250,17 @@ else:
             
             if top_qs:
                 st.session_state.seq_list = [{"genre": item["genre"], "q": item["q"]} for item in top_qs]
+                st.session_state.seq_idx = 0
+                st.session_state.quiz_mode = "sequential"
+                
+                nxt = st.session_state.seq_list[0]
+                st.session_state.current_genre = nxt["genre"]
+                st.session_state.current_q = nxt["q"]
+                st.session_state.mode = "quiz"
+                st.session_state.show_answer = False
+                st.rerun() # 🚀 ここでクイズ画面へジャンプ！
+            else:
+                st.error("おすすめできる問題が見つかりませんでした．")
 
 
     # --------------------------------------
