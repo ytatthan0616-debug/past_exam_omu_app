@@ -431,6 +431,27 @@ if "chat_q_key" not in st.session_state: st.session_state.chat_q_key = None
 # サイドバー
 # ==========================================
 st.sidebar.title("メニュー")
+
+# 💡 追加：解きかけの問題がメモリに残っている場合だけ、一番上に「復帰ボタン」を目立たせて表示！
+if st.session_state.get("current_q") is not None and st.session_state.get("mode") != "quiz":
+    st.sidebar.markdown("<div style='color: #FF69B4; font-size: 0.85em; font-weight: bold; margin-bottom: 5px;'>⚠️ 解きかけの問題があります</div>", unsafe_allow_html=True)
+    if st.sidebar.button("🔙 さっきの問題に戻る", type="primary", use_container_width=True):
+        st.session_state.mode = "quiz"
+        st.rerun()
+    st.sidebar.markdown("<hr style='margin: 0.5em 0px 1em 0px; border: 0.5px dashed #444;'/>", unsafe_allow_html=True)
+
+if st.sidebar.button("🐾 ホーム", use_container_width=True):
+    st.session_state.mode = "home"
+    st.rerun()
+
+if st.sidebar.button("📝 ランダム演習", use_container_width=True):
+    st.session_state.mode = "quiz"
+    st.session_state.quiz_mode = "random"
+    st.session_state.current_q = None # 新しく引き直すためにリセット
+    st.rerun()
+
+
+
 if st.sidebar.button("🐾 ホーム", use_container_width=True):
     st.session_state.mode = "home"
     st.rerun()
