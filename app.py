@@ -450,18 +450,6 @@ if st.sidebar.button("📝 ランダム演習", use_container_width=True):
     st.session_state.current_q = None # 新しく引き直すためにリセット
     st.rerun()
 
-
-
-if st.sidebar.button("🐾 ホーム", use_container_width=True):
-    st.session_state.mode = "home"
-    st.rerun()
-
-if st.sidebar.button("📝 ランダム演習", use_container_width=True):
-    st.session_state.mode = "quiz"
-    st.session_state.quiz_mode = "random"
-    st.session_state.current_q = None
-    st.rerun()
-
 if st.sidebar.button("🎯 頻出＆弱点特訓 (AIおすすめ)", use_container_width=True):
     st.session_state.mode = "recommend_setup"
     st.rerun()
