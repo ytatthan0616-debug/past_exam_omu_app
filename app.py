@@ -142,7 +142,7 @@ def get_global_q_stats():
     return q_stats
 def get_difficulty_ui(q_key, q_stats):
     if q_key not in q_stats or q_stats[q_key]["ans"] == 0:
-        return "<span style='color: #888; font-size: 0.6em; font-weight: normal;'>📊 難易度: データなし</span>"
+        return "<span style='color: #888; font-size: 0.6em; font-weight: normal;'>📊 みんなの正答率: データなし</span>"
     
     ans = q_stats[q_key]["ans"]
     score = q_stats[q_key]["score"]
