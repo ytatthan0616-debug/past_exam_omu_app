@@ -296,7 +296,12 @@ def extract_year_val(year_str):
 
 st.set_page_config(page_title="過去問演習アプリ", layout="wide")
 
-
+# ==========================================
+# 💡 追加：URLからの自動復帰（タイムアウト対策）
+# ==========================================
+# URLに ?user=名前 がついていたら、自動でログイン状態を復元する
+if "username" not in st.session_state and "user" in st.query_params:
+    st.session_state.username = st.query_params["user"]
 
 if "username" not in st.session_state:
     st.markdown("<h1 style='text-align: center;'>🚪 過去問演習アプリへようこそ</h1>", unsafe_allow_html=True)
@@ -330,11 +335,13 @@ if "username" not in st.session_state:
                         # 新規登録
                         user_ref.set({"password": hashed_pw})
                         st.session_state.username = uname
+                        st.query_params["user"] = uname # 💡 ここでURLに名前を保存！
                         st.rerun()
                     else:
                         # 既存ユーザーのログインチェック
                         if auth_data.get("password") == hashed_pw:
                             st.session_state.username = uname
+                            st.query_params["user"] = uname # 💡 ここでURLに名前を保存！
                             st.rerun()
                         else:
                             st.error("パスワードが間違っています。")
