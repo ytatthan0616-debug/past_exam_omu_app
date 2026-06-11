@@ -10,12 +10,15 @@ from PIL import Image
 import time
 import hashlib
 
-# --- ここから追加：Firebaseの準備 ---
 import firebase_admin
 from firebase_admin import credentials, db
 
-# すでに起動しているか確認してから初期化する
-if not firebase_admin._apps:
+# 💡 修正：Streamlitの再読み込みでエラーが出ないよう、最も強力な二重起動防止ブロックに変更
+try:
+    # すでにFirebaseが起動しているか確認（起動していれば何もしない）
+    firebase_admin.get_app()
+except ValueError:
+    # まだ起動していなければ、新しく初期化する
     key_dict = json.loads(st.secrets["FIREBASE_JSON"])
     cred = credentials.Certificate(key_dict)
     firebase_admin.initialize_app(cred, {
