@@ -1108,6 +1108,59 @@ else:
                     st.success("🎉 問題データの移行が完了しました！アプリを更新すると問題が表示されます！")
                 else:
                     st.error("⚠️ questions.json が見つかりませんでした．")
+
+            # ====================================================
+            # 💡 ここから追加：タグの一斉クリーンアップ（自動分割）機能
+            # ====================================================
+            st.markdown("<hr style='margin: 1em 0px; border: 0.5px solid #444;'/>", unsafe_allow_html=True)
+            st.markdown("### 🧹 タグの一斉自動クリーンアップ")
+            st.write("「タグA, タグB」のようにカンマで繋がってしまったタグを、データベース全体で自動的に分割して綺麗に直します．")
+            
+            if st.button("🚨 全データ（過去問＋全ユーザーの成績）のタグを分割・修正する", type="primary"):
+                with st.spinner("全ユーザーのデータベースをクリーンアップ中..."):
+                    # 1. 大元の問題データ (data) を修正
+                    for g in data:
+                        for q in data[g]:
+                            cleaned_tags = []
+                            for t in q.get("tags", []):
+                                for sub_t in t.replace("，", ",").split(","):
+                                    if sub_t.strip():
+                                        cleaned_tags.append(sub_t.strip())
+                            q["tags"] = list(dict.fromkeys(cleaned_tags))
+                    
+                    save_data(data) # 大元データを保存
+                    
+                    # 2. 💡 修正：データベース内の「全ユーザー」を検索して全員分を修正する
+                    users_ref = db.reference('users')
+                    all_users = users_ref.get()
+                    
+                    if all_users:
+                        for uname, udata in all_users.items():
+                            user_evals = udata.get('evals', {})
+                            is_updated = False
+                            
+                            for g, qs in user_evals.items():
+                                for k, val in qs.items():
+                                    if isinstance(val, dict):
+                                        old_tags = val.get("tags", [])
+                                        if old_tags:
+                                            cleaned_tags = []
+                                            for t in old_tags:
+                                                for sub_t in t.replace("，", ",").split(","):
+                                                    if sub_t.strip():
+                                                        cleaned_tags.append(sub_t.strip())
+                                            val["tags"] = list(dict.fromkeys(cleaned_tags))
+                                            is_updated = True
+                            
+                            # 変更があったユーザーだけFirebaseに保存し直す
+                            if is_updated:
+                                db.reference(f'users/{uname}/evals').set(user_evals)
+                    
+                    # 画面表示用のキャッシュもクリア
+                    st.cache_data.clear()
+                    
+                    st.success("🎉 全ユーザーのタグの分割とクリーンアップが完了しました！")
+                    st.rerun()
                     
         else:
             # 用皆樹さん以外のユーザーがアクセスした時の表示
