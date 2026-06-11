@@ -1445,15 +1445,19 @@ else:
         with tab_search:
         
             # --- 追加機能：タグの統計情報を集計 ---
+            # --- 追加機能：タグの統計情報を集計 ---
             tag_stats = {}
             for genre, questions in data.items():
                 for q in questions:
                     q_key = f"{q.get('year', '')}_{q.get('number', '')}"
                     rating_data = evals.get(genre, {}).get(q_key)
                 
-                    if rating_data is None: rating, tags = "", q.get("tags", [])
-                    elif isinstance(rating_data, str): rating, tags = rating_data, q.get("tags", [])
-                    else: rating, tags = rating_data.get("rating", ""), rating_data.get("tags", [])
+                    # 💡 修正：個人の古いタグは無視し、常に大元データ(q)の最新タグを使う！
+                    tags = q.get("tags", [])
+                    
+                    if rating_data is None: rating = ""
+                    elif isinstance(rating_data, str): rating = rating_data
+                    else: rating = rating_data.get("rating", "")
                 
                     for t in tags:
                         if t not in tag_stats:
@@ -1519,9 +1523,12 @@ else:
                         q_key = f"{q.get('year', '')}_{q.get('number', '')}"
                         rating_data = evals.get(genre, {}).get(q_key)
                     
-                        if rating_data is None: rating, tags = "", q.get("tags", [])
-                        elif isinstance(rating_data, str): rating, tags = rating_data, q.get("tags", [])
-                        else: rating, tags = rating_data.get("rating", ""), rating_data.get("tags", [])
+                        # 💡 修正：検索結果の表示も、大元データ(q)の最新タグを優先する！
+                        tags = q.get("tags", [])
+                        
+                        if rating_data is None: rating = ""
+                        elif isinstance(rating_data, str): rating = rating_data
+                        else: rating = rating_data.get("rating", "")
                         
                         if selected_tag in tags:
                             found = True
