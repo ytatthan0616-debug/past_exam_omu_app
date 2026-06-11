@@ -1404,9 +1404,12 @@ else:
                 
                     for t in tags:
                         if t not in tag_stats:
-                            tag_stats[t] = {"count": 0, "〇": 0, "▲": 0, "×": 0, "未": 0}
+                            # 💡 修正1：「△」用のカウント箱を追加！
+                            tag_stats[t] = {"count": 0, "〇": 0, "△": 0, "▲": 0, "×": 0, "未": 0}
                         tag_stats[t]["count"] += 1
+                        
                         if rating == "〇": tag_stats[t]["〇"] += 1
+                        elif rating == "△": tag_stats[t]["△"] += 1  # 💡 修正2：「△」をカウント
                         elif rating == "▲": tag_stats[t]["▲"] += 1
                         elif rating == "×": tag_stats[t]["×"] += 1
                         else: tag_stats[t]["未"] += 1
@@ -1422,14 +1425,20 @@ else:
                 
                     table_data = []
                     for t, stats in tag_stats.items():
-                        total_eval = stats["〇"] + stats["▲"] + stats["×"]
-                        acc = (stats["〇"] / total_eval * 100) if total_eval > 0 else 0.0
+                        # 💡 修正3：評価された総数に「△」も含める
+                        total_eval = stats["〇"] + stats["△"] + stats["▲"] + stats["×"]
+                        
+                        # 💡 修正4：部分点（〇:100%, △:66%, ▲:33%）を考慮した正確な正答率を計算
+                        score = (stats["〇"] * 1.0) + (stats["△"] * 0.66) + (stats["▲"] * 0.33)
+                        acc = (score / total_eval * 100) if total_eval > 0 else 0.0
+                        
                         table_data.append({
                             "タグ名": t,
                             "問題数": stats["count"],
                             "正答率 (%)": round(acc, 1),
                             "🟢 完璧": stats["〇"],
-                            "🟡 復習": stats["▲"],
+                            "🟡 だいたい": stats["△"],  # 💡 修正5：表に「だいたい解けた」を追加
+                            "🟠 復習": stats["▲"],
                             "🔴 苦手": stats["×"],
                             "⚪ 未評価": stats["未"]
                         })
