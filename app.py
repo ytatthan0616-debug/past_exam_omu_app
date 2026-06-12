@@ -1043,7 +1043,7 @@ else:
         st.write("似たようなタグを一つにまとめたり，名前を変更したりできます．")
         
         # --- 🔒 ここから管理者（用皆樹さん）専用のロック ---
-        if st.session_state.get("username") == "用皆樹":
+        if st.session_state.get("username") == "のーぷ信者":
             st.markdown("## 🏷️ タグの管理・クラウド移行（管理者専用）")
             
             # 全タグの取得
@@ -1935,6 +1935,81 @@ else:
                     if st.session_state.get("ai_generated_answer"):
                         # 既にAI解答がある場合は表示
                         st.markdown("【🤖 AI自動生成解答】\n\n" + st.session_state.ai_generated_answer)
+                        
+                        # ==========================================
+                        # 💡 追加：管理者限定の「デフォルト解答へ登録」ボタン
+                        # ==========================================
+                        if st.session_state.get("username") == "のーぷ信者":
+                            st.markdown("<hr style='margin: 1em 0px; border: 0.5px dashed #444;'/>", unsafe_allow_html=True)
+                            if st.button("💾 このAI解答を「通常の解答」としてデータベースに登録する", type="primary", use_container_width=True, key=f"save_ai_ans_{q_key}"):
+                                with st.spinner("データベースを更新中..."):
+                                    # 1. 大元のデータ (data) を検索して解答を上書きする
+                                    updated = False
+                                    for g in data:
+                                        for q_item in data[g]:
+                                            if f"{q_item.get('year', '')}_{q_item.get('number', '')}" == q_key:
+                                                q_item["answer"] = st.session_state.ai_generated_answer
+                                                updated = True
+                                                break
+                                        if updated: break
+                                    
+                                    # 2. クラウドに保存してキャッシュをクリア
+                                    save_data(data)
+                                    st.cache_data.clear()
+                                    
+                                    # 3. 現在表示している問題データも更新して、すぐに「通常の解答」タブに反映させる
+                                    st.session_state.current_q["answer"] = st.session_state.ai_generated_answer
+                                    
+                                    st.success("🎉 デフォルトの解答としてデータベースに登録しました！")
+                                    st.rerun()
+
+                        # ==========================================
+                        # 💡 ここから追加：AI解答の再生成（フィードバック付き）機能
+                        # ==========================================
+                        st.markdown("<hr style='margin: 1.5em 0px 0.5em 0px; border: 0.5px dashed #444;'/>", unsafe_allow_html=True)
+                        with st.expander("🔄 解答に違和感がある・別解が見たい場合（再生成）", expanded=False):
+                            st.write("AIが間違っていると思う箇所や、追加の指示があれば入力して再生成できます。（空白のまま再生成も可能です）")
+                            regen_comment = st.text_area("AIへの追加指示・ヒント（任意）", placeholder="例：最後の積分範囲が間違っていませんか？ / テイラー展開を使って解いてください", key=f"regen_comment_{q_key}")
+                            
+                            if st.button("✨ 指示を踏まえて解答を作り直す", use_container_width=True, key=f"regen_btn_{q_key}"):
+                                api_key = conf.get("gemini_api_key")
+                                if not api_key:
+                                    st.warning("⚠️ 個人設定画面から Gemini API キーを設定してください．")
+                                else:
+                                    with st.spinner("AIが指摘を踏まえて解答を修正中です..."):
+                                        try:
+                                            genai.configure(api_key=api_key)
+                                            model = genai.GenerativeModel('gemini-3.1-flash-lite')
+                                            
+                                            # 基本のプロンプト
+                                            base_prompt = """
+                                            この問題画像の解答・解説を作成してください．
+                                            【厳格な記述ルール】
+                                            ・計算式などはあきらかな場合を除き，できる限り途中式を明示すること．
+                                            ・文章は日本語とし，句点・句読点は「．」「，」を使用すること．
+                                            ・数式は必ず LaTeX 形式で記述すること．インライン数式は $，独立した数式ブロックは $$ で囲み，記号と数式の間にスペースを空けないこと．
+                                            ・段落や数式ブロックの前後には適切に改行を入れること．
+                                            """
+                                            
+                                            # ユーザーからのコメントがあればプロンプトに強力に反映させる
+                                            if regen_comment.strip():
+                                                base_prompt += f"\n\n【ユーザーからの追加指示・訂正】\n前回の解答に指摘が入りました。以下の指示を必ず踏まえて、解答を作り直してください。\n「{regen_comment.strip()}」"
+                                                
+                                            img_path = q.get("question_image", "")
+                                            if img_path and os.path.exists(img_path):
+                                                from PIL import Image
+                                                img_obj = Image.open(img_path)
+                                                
+                                                response = model.generate_content([base_prompt, img_obj])
+                                                
+                                                # AIの新しい回答でセッションを上書きしてリロード
+                                                st.session_state.ai_generated_answer = response.text
+                                                st.rerun()
+                                            else:
+                                                st.warning("⚠️ 問題の画像が見つからないため，AIに読み込ませることができません．")
+                                        except Exception as e:
+                                            st.error(f"エラーが発生しました．詳細: {e}")
+                                    
                     else:
                         # まだAI解答がない場合は、タブの中に生成ボタンを置く
                         st.info("💡 AIによる解説はまだ生成されていません．")
